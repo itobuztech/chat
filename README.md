@@ -62,6 +62,7 @@ Set `VITE_API_BASE_URL` in a `.env` file under `webapp/` to point the client to 
 - Loads historical messages via the REST API.
 - Opens a WebSocket connection (`ws://<host>/ws`) for signaling and live message delivery.
 - Establishes a WebRTC data channel (using the TURN server) so new texts flow peer-to-peer in real time, falling back to server delivery if the peer is offline.
+- Surfaces live typing indicators that travel over WebRTC when available (and fall back to WebSocket events).
 
 ## Messaging API
 The Express server exposes lightweight REST APIs that act as the WebRTC signaling and persistence layer for peer messages.

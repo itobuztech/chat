@@ -10,6 +10,8 @@ import { saveSignal } from "../services/signalingService.js";
 
 type ClientRegistry = Map<string, Set<WebSocket>>;
 
+type TypingState = "start" | "stop";
+
 interface SignalOutbound {
   type: "signal";
   payload: ApiSignal;
@@ -20,12 +22,30 @@ interface MessageOutbound {
   payload: ApiMessage;
 }
 
+interface TypingPayload {
+  senderId: string;
+  recipientId: string;
+  conversationId: string;
+  state: TypingState;
+  timestamp: number;
+}
+
+interface TypingOutbound {
+  type: "typing";
+  payload: TypingPayload;
+}
+
 interface ErrorOutbound {
   type: "error";
   error: string;
 }
 
-type OutboundEvent = SignalOutbound | MessageOutbound | ErrorOutbound | Record<string, unknown>;
+type OutboundEvent =
+  | SignalOutbound
+  | MessageOutbound
+  | TypingOutbound
+  | ErrorOutbound
+  | Record<string, unknown>;
 
 let registry: ClientRegistry = new Map();
 let wss: WebSocketServer | null = null;
@@ -59,6 +79,34 @@ export function initializeWebSocketServer(server: HttpServer): void {
               return;
             }
             await handleSignalEvent(socket, data);
+            break;
+          }
+          case "typing": {
+            if (!peerId) {
+              send(socket, { type: "error", error: "Handshake not completed." });
+              return;
+            }
+            const recipientId =
+              typeof data.recipientId === "string" ? data.recipientId.trim() : "";
+            const rawState = data.state === "start" ? "start" : data.state === "stop" ? "stop" : null;
+            if (!recipientId || !rawState) {
+              send(socket, { type: "error", error: "Invalid typing payload." });
+              return;
+            }
+            const timestamp =
+              typeof data.timestamp === "number" ? data.timestamp : Date.now();
+            const conversationId =
+              typeof data.conversationId === "string" && data.conversationId.length > 0
+                ? data.conversationId
+                : createConversationId(peerId, recipientId);
+
+            broadcastTyping({
+              senderId: peerId,
+              recipientId,
+              conversationId,
+              state: rawState,
+              timestamp,
+            });
             break;
           }
           case "ping": {
@@ -97,6 +145,10 @@ export function broadcastSignal(signal: ApiSignal, excludePeerId?: string): void
   if (excludePeerId !== signal.recipientId) {
     emitToPeer(signal.recipientId, { type: "signal", payload: signal });
   }
+}
+
+export function broadcastTyping(payload: TypingPayload): void {
+  emitToPeer(payload.recipientId, { type: "typing", payload });
 }
 
 export function getConnectedPeerIds(): string[] {
@@ -161,4 +213,8 @@ async function handleSignalEvent(socket: WebSocket, data: Record<string, unknown
       error instanceof Error ? error.message : "Failed to persist signaling payload.";
     send(socket, { type: "error", error: message });
   }
+}
+
+function createConversationId(peerA: string, peerB: string): string {
+  return [peerA.trim(), peerB.trim()].sort((left, right) => left.localeCompare(right)).join("#");
 }

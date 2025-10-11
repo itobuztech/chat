@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import {
   API_BASE_URL,
@@ -36,6 +36,10 @@ function App(): JSX.Element {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [peerTyping, setPeerTyping] = useState(false);
+  const typingTimeoutRef = useRef<number | null>(null);
+  const typingActiveRef = useRef(false);
+  const peerTypingTimeoutRef = useRef<number | null>(null);
   const previousSocketStatusRef = useRef<string>("disconnected");
 
   const normalizedSelfId = selfId.trim();
@@ -107,6 +111,23 @@ function App(): JSX.Element {
     };
   }, [conversationReady, normalizedPeerId, normalizedSelfId]);
 
+  const handlePeerTyping = useCallback(
+    (typing: boolean) => {
+      setPeerTyping(typing);
+      if (peerTypingTimeoutRef.current !== null) {
+        window.clearTimeout(peerTypingTimeoutRef.current);
+        peerTypingTimeoutRef.current = null;
+      }
+      if (typing) {
+        peerTypingTimeoutRef.current = window.setTimeout(() => {
+          setPeerTyping(false);
+          peerTypingTimeoutRef.current = null;
+        }, 4000);
+      }
+    },
+    [],
+  );
+
   const appendIncomingMessage = useCallback(
     (incoming: WebRtcMessage) => {
       const chatMessage: ChatMessage = {
@@ -120,23 +141,28 @@ function App(): JSX.Element {
         deliveredAt: incoming.createdAt,
       };
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
+      handlePeerTyping(false);
     },
-    [],
+    [handlePeerTyping],
   );
 
   const {
     status: rtcStatus,
     socketStatus,
     error: rtcError,
+    dataChannelReady,
     sendMessage: sendViaRtc,
+    sendTyping,
   } = useWebRtcMessaging({
     selfId: normalizedSelfId,
     peerId: normalizedPeerId,
     enabled: conversationReady,
     onMessage: appendIncomingMessage,
+    onTyping: handlePeerTyping,
   });
 
-  const canSendMessage = conversationReady && !isSending;
+  const isMessageEmpty = messageInput.trim().length === 0;
+  const canSendMessage = conversationReady && !isSending && !isMessageEmpty;
 
   const rtcStatusLabels: Record<string, string> = {
     idle: "Idle",
@@ -159,6 +185,53 @@ function App(): JSX.Element {
   const socketStatusLabel =
     socketStatusLabels[socketStatus] ?? socketStatus ?? "Unknown";
 
+  const dataChannelLabel = dataChannelReady ? "Open" : "Closed";
+  const dataChannelStatusClass = dataChannelReady ? "status-open" : "status-closed";
+
+  const handleMessageChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
+      const value = event.target.value;
+      setMessageInput(value);
+      setStatusMessage(null);
+
+      if (!conversationReady) {
+        return;
+      }
+
+      if (!typingActiveRef.current) {
+        typingActiveRef.current = true;
+        void sendTyping(true);
+      }
+
+      if (typingTimeoutRef.current !== null) {
+        window.clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = window.setTimeout(() => {
+        typingActiveRef.current = false;
+        void sendTyping(false);
+        typingTimeoutRef.current = null;
+      }, 2000);
+    },
+    [conversationReady, sendTyping],
+  );
+
+  const handleInputBlur = useCallback(() => {
+    if (!conversationReady) {
+      return;
+    }
+
+    if (typingTimeoutRef.current !== null) {
+      window.clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    if (typingActiveRef.current) {
+      typingActiveRef.current = false;
+      void sendTyping(false);
+    }
+  }, [conversationReady, sendTyping]);
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!conversationReady) {
@@ -170,6 +243,16 @@ function App(): JSX.Element {
     if (!content) {
       return;
     }
+
+    if (typingTimeoutRef.current !== null) {
+      window.clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    if (typingActiveRef.current) {
+      typingActiveRef.current = false;
+      void sendTyping(false);
+    }
+    handlePeerTyping(false);
 
     setIsSending(true);
     setError(null);
@@ -210,6 +293,32 @@ function App(): JSX.Element {
       setIsSending(false);
     }
   };
+
+  useEffect(() => {
+    if (!conversationReady) {
+      if (typingTimeoutRef.current !== null) {
+        window.clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      typingActiveRef.current = false;
+      void sendTyping(false);
+      handlePeerTyping(false);
+    }
+  }, [conversationReady, handlePeerTyping, sendTyping]);
+
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current !== null) {
+        window.clearTimeout(typingTimeoutRef.current);
+      }
+      if (peerTypingTimeoutRef.current !== null) {
+        window.clearTimeout(peerTypingTimeoutRef.current);
+      }
+      typingActiveRef.current = false;
+      void sendTyping(false);
+      handlePeerTyping(false);
+    };
+  }, [handlePeerTyping, sendTyping]);
 
 
   useEffect(() => {
@@ -304,6 +413,12 @@ function App(): JSX.Element {
             </span>
           </p>
           <p className="status info">
+            Data channel:{" "}
+            <span className={`status-pill ${dataChannelStatusClass}`}>
+              {dataChannelLabel}
+            </span>
+          </p>
+          <p className="status info">
             WebSocket status:{" "}
             <span className={`status-pill status-${socketStatus}`}>
               {socketStatusLabel}
@@ -352,6 +467,11 @@ function App(): JSX.Element {
               </article>
             );
           })}
+          {peerTyping && (
+            <div className="typing-indicator">
+              {(normalizedPeerId || "Peer")} is typing…
+            </div>
+          )}
         </section>
         <form className="chat-composer" onSubmit={handleSubmit}>
           <textarea
@@ -359,8 +479,9 @@ function App(): JSX.Element {
             placeholder="Type a message…"
             rows={3}
             value={messageInput}
-            onChange={(event) => setMessageInput(event.target.value)}
-            disabled={!canSendMessage}
+            onChange={handleMessageChange}
+            onBlur={handleInputBlur}
+            disabled={!conversationReady}
           />
           <button type="submit" disabled={!canSendMessage}>
             {isSending ? "Sending…" : "Send"}
