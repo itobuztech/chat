@@ -48,7 +48,7 @@ export async function fetchIceConfig(): Promise<IceConfigResponse> {
   return parseResponse<IceConfigResponse>(response);
 }
 
-export async function sendSignal<TPayload extends Record<string, unknown> | null>(
+export async function persistSignal<TPayload extends Record<string, unknown> | null>(
   payload: SendSignalPayload & { payload?: TPayload },
 ): Promise<WebRtcSignal<TPayload>> {
   const response = await fetch(`${API_BASE_URL}/api/webrtc/signals`, {

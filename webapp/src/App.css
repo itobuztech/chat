@@ -111,6 +111,7 @@
   color: #bbf7d0;
 }
 
+.status-pill.status-connecting,
 .status-pill.status-negotiating,
 .status-pill.status-fetching-ice,
 .status-pill.status-waiting {

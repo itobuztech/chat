@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { API_BASE_URL } from "../lib/messagesApi.js";
 import {
   fetchIceConfig,
   fetchPendingSignals,
-  sendSignal,
+  persistSignal,
+  type SignalType,
   type WebRtcSignal,
 } from "../lib/webrtcSignalsApi.js";
 
@@ -15,6 +17,8 @@ type ConnectionStatus =
   | "connected"
   | "disconnected"
   | "error";
+
+type SocketStatus = "connecting" | "connected" | "disconnected";
 
 export interface WebRtcMessage {
   id: string;
@@ -34,6 +38,7 @@ interface UseWebRtcMessagingOptions {
 
 interface UseWebRtcMessagingResult {
   status: ConnectionStatus;
+  socketStatus: SocketStatus;
   error: string | null;
   sendMessage: (message: WebRtcMessage) => Promise<void>;
   disconnect: () => Promise<void>;
@@ -48,6 +53,25 @@ function createConversationId(a: string, b: string): string {
   return [a.trim(), b.trim()].sort((left, right) => left.localeCompare(right)).join("#");
 }
 
+function deriveWebSocketUrl(baseHttpUrl: string): string {
+  const explicit =
+    typeof import.meta.env.VITE_WS_URL === "string"
+      ? import.meta.env.VITE_WS_URL.trim()
+      : "";
+  if (explicit) {
+    return explicit;
+  }
+
+  try {
+    const url = new URL(baseHttpUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/ws`;
+    return url.toString();
+  } catch {
+    return `${baseHttpUrl.replace(/^http/i, "ws").replace(/\/$/, "")}/ws`;
+  }
+}
+
 export function useWebRtcMessaging({
   selfId,
   peerId,
@@ -55,25 +79,32 @@ export function useWebRtcMessaging({
   onMessage,
 }: UseWebRtcMessagingOptions): UseWebRtcMessagingResult {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
+  const [socketStatus, setSocketStatus] = useState<SocketStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
 
   const normalizedSelfId = selfId.trim();
   const normalizedPeerId = peerId.trim();
+
   const conversationId = useMemo(
     () => createConversationId(normalizedSelfId, normalizedPeerId),
     [normalizedPeerId, normalizedSelfId],
   );
 
-  const isInitiator = useMemo(() => {
-    return normalizedSelfId < normalizedPeerId;
-  }, [normalizedPeerId, normalizedSelfId]);
+  const isInitiator = useMemo(
+    () => normalizedSelfId < normalizedPeerId,
+    [normalizedPeerId, normalizedSelfId],
+  );
+
+  const wsUrl = useMemo(() => deriveWebSocketUrl(API_BASE_URL), []);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const iceBundleRef = useRef<IceBundle | null>(null);
   const pendingIcePromiseRef = useRef<Promise<IceBundle> | null>(null);
-  const pollingIntervalRef = useRef<number | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const backlogDrainedRef = useRef(false);
   const startInFlightRef = useRef(false);
 
   const resetConnectionRefs = useCallback(() => {
@@ -189,6 +220,37 @@ export function useWebRtcMessaging({
     [onMessage, resetConnectionRefs],
   );
 
+  const sendSignalEnvelope = useCallback(
+    async (
+      sessionId: string,
+      type: SignalType,
+      payload: Record<string, unknown> | null,
+    ) => {
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "signal",
+            sessionId,
+            senderId: normalizedSelfId,
+            recipientId: normalizedPeerId,
+            signalType: type,
+            payload,
+          }),
+        );
+      } else {
+        await persistSignal({
+          sessionId,
+          senderId: normalizedSelfId,
+          recipientId: normalizedPeerId,
+          type,
+          payload,
+        });
+      }
+    },
+    [normalizedPeerId, normalizedSelfId],
+  );
+
   const ensurePeerConnection = useCallback(
     async (sessionId: string): Promise<RTCPeerConnection> => {
       if (pcRef.current) {
@@ -210,13 +272,11 @@ export function useWebRtcMessaging({
           return;
         }
         try {
-          await sendSignal({
-            sessionId: sessionIdRef.current,
-            senderId: normalizedSelfId,
-            recipientId: normalizedPeerId,
-            type: "candidate",
-            payload: event.candidate.toJSON(),
-          });
+          await sendSignalEnvelope(
+            sessionIdRef.current,
+            "candidate",
+            event.candidate.toJSON(),
+          );
         } catch (candidateError) {
           console.error("Failed to send ICE candidate", candidateError);
         }
@@ -250,13 +310,7 @@ export function useWebRtcMessaging({
 
       return peerConnection;
     },
-    [
-      ensureIceConfig,
-      normalizedPeerId,
-      normalizedSelfId,
-      resetConnectionRefs,
-      setupDataChannel,
-    ],
+    [ensureIceConfig, resetConnectionRefs, sendSignalEnvelope, setupDataChannel],
   );
 
   const sendByeSignal = useCallback(async () => {
@@ -264,17 +318,11 @@ export function useWebRtcMessaging({
       return;
     }
     try {
-      await sendSignal({
-        sessionId: sessionIdRef.current,
-        senderId: normalizedSelfId,
-        recipientId: normalizedPeerId,
-        type: "bye",
-        payload: null,
-      });
-    } catch (byeError) {
-      console.warn("Failed to send BYE signal", byeError);
+      await sendSignalEnvelope(sessionIdRef.current, "bye", null);
+    } catch (errorSignal) {
+      console.warn("Failed to send bye signal", errorSignal);
     }
-  }, [normalizedPeerId, normalizedSelfId]);
+  }, [sendSignalEnvelope]);
 
   const cleanupConnection = useCallback(async () => {
     await sendByeSignal();
@@ -299,13 +347,7 @@ export function useWebRtcMessaging({
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
 
-        await sendSignal({
-          sessionId: signal.sessionId,
-          senderId: normalizedSelfId,
-          recipientId: normalizedPeerId,
-          type: "answer",
-          payload: JSON.parse(JSON.stringify(answer)),
-        });
+        await sendSignalEnvelope(signal.sessionId, "answer", JSON.parse(JSON.stringify(answer)));
       } catch (offerError) {
         console.error("Failed to process offer", offerError);
         setError(
@@ -314,38 +356,33 @@ export function useWebRtcMessaging({
         setStatus("error");
       }
     },
-    [ensurePeerConnection, normalizedPeerId, normalizedSelfId],
+    [ensurePeerConnection, sendSignalEnvelope],
   );
 
-  const processAnswer = useCallback(
-    async (signal: WebRtcSignal) => {
-      try {
-        if (!pcRef.current || !signal.payload) {
-          return;
-        }
-        await pcRef.current.setRemoteDescription(
-          signal.payload as RTCSessionDescriptionInit,
-        );
-        setStatus("negotiating");
-      } catch (answerError) {
-        console.error("Failed to process answer", answerError);
-        setError(
-          answerError instanceof Error ? answerError.message : "Answer failed.",
-        );
-        setStatus("error");
+  const processAnswer = useCallback(async (signal: WebRtcSignal) => {
+    try {
+      if (!pcRef.current || !signal.payload) {
+        return;
       }
-    },
-    [],
-  );
+      await pcRef.current.setRemoteDescription(
+        signal.payload as RTCSessionDescriptionInit,
+      );
+      setStatus("negotiating");
+    } catch (answerError) {
+      console.error("Failed to process answer", answerError);
+      setError(
+        answerError instanceof Error ? answerError.message : "Answer failed.",
+      );
+      setStatus("error");
+    }
+  }, []);
 
   const processCandidate = useCallback(async (signal: WebRtcSignal) => {
     try {
       if (!pcRef.current || !signal.payload) {
         return;
       }
-      await pcRef.current.addIceCandidate(
-        signal.payload as RTCIceCandidateInit,
-      );
+      await pcRef.current.addIceCandidate(signal.payload as RTCIceCandidateInit);
     } catch (candidateError) {
       console.error("Failed to add ICE candidate", candidateError);
       setError(
@@ -388,14 +425,176 @@ export function useWebRtcMessaging({
     ],
   );
 
+  const drainPendingSignals = useCallback(async () => {
+    if (backlogDrainedRef.current || !normalizedSelfId) {
+      return;
+    }
+    try {
+      const backlog = await fetchPendingSignals(
+        normalizedSelfId,
+        sessionIdRef.current ?? undefined,
+      );
+      for (const signal of backlog) {
+        await handleIncomingSignal(signal);
+      }
+      backlogDrainedRef.current = true;
+    } catch (drainError) {
+      console.error("Failed to fetch pending signals", drainError);
+    }
+  }, [handleIncomingSignal, normalizedSelfId]);
+
+  useEffect(() => {
+    backlogDrainedRef.current = false;
+  }, [normalizedSelfId, normalizedPeerId]);
+
+  useEffect(() => {
+    if (!enabled || !normalizedSelfId) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      void cleanupConnection();
+      setSocketStatus("disconnected");
+      return;
+    }
+
+    let cancelled = false;
+
+    const establishSocket = () => {
+      if (cancelled) {
+        return;
+      }
+      setSocketStatus("connecting");
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        if (cancelled) {
+          return;
+        }
+        setSocketStatus("connected");
+        socket.send(
+          JSON.stringify({ type: "hello", peerId: normalizedSelfId }),
+        );
+      };
+
+      socket.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case "hello:ack":
+              backlogDrainedRef.current = false;
+              await drainPendingSignals();
+              break;
+            case "signal":
+              if (data.payload) {
+                await handleIncomingSignal(data.payload as WebRtcSignal);
+              }
+              break;
+            case "message:new":
+            case "message:status":
+              if (data.payload) {
+                const payload = data.payload as {
+                  id: string;
+                  conversationId: string;
+                  senderId: string;
+                  recipientId: string;
+                  content: string;
+                  createdAt: string;
+                };
+                if (payload && typeof payload.id === "string") {
+                  onMessage({
+                    id: payload.id,
+                    conversationId: payload.conversationId,
+                    senderId: payload.senderId,
+                    recipientId: payload.recipientId,
+                    content: payload.content,
+                    createdAt: payload.createdAt,
+                  });
+                }
+              }
+              break;
+            case "error":
+              if (typeof data.error === "string") {
+                setError(data.error);
+              }
+              break;
+            default:
+              break;
+          }
+        } catch (parseError) {
+          console.error("Failed to parse WebSocket payload", parseError);
+        }
+      };
+
+      const scheduleReconnect = () => {
+        if (cancelled) {
+          return;
+        }
+        if (reconnectTimerRef.current !== null) {
+          return;
+        }
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          establishSocket();
+        }, 2000);
+      };
+
+      socket.onclose = () => {
+        if (cancelled) {
+          return;
+        }
+        setSocketStatus("disconnected");
+        scheduleReconnect();
+      };
+
+      socket.onerror = (socketError) => {
+        console.error("WebSocket error", socketError);
+        setSocketStatus("disconnected");
+      };
+    };
+
+    establishSocket();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      const socket = wsRef.current;
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.close();
+        wsRef.current = null;
+      }
+      setSocketStatus("disconnected");
+    };
+  }, [
+    cleanupConnection,
+    drainPendingSignals,
+    enabled,
+    handleIncomingSignal,
+    normalizedSelfId,
+    onMessage,
+    wsUrl,
+  ]);
+
   const startConnection = useCallback(async () => {
     if (startInFlightRef.current) {
       return;
     }
     startInFlightRef.current = true;
     try {
-      const sessionId = `${conversationId}-${Date.now()}`;
-      const peerConnection = await ensurePeerConnection(sessionId);
+      const newSessionId = `${conversationId}-${Date.now()}`;
+      const peerConnection = await ensurePeerConnection(newSessionId);
 
       const dataChannel = peerConnection.createDataChannel("chat", {
         ordered: true,
@@ -407,13 +606,11 @@ export function useWebRtcMessaging({
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      await sendSignal({
-        sessionId,
-        senderId: normalizedSelfId,
-        recipientId: normalizedPeerId,
-        type: "offer",
-        payload: JSON.parse(JSON.stringify(offer)),
-      });
+      await sendSignalEnvelope(
+        newSessionId,
+        "offer",
+        JSON.parse(JSON.stringify(offer)),
+      );
     } catch (startError) {
       console.error("Failed to start WebRTC connection", startError);
       setError(
@@ -425,96 +622,13 @@ export function useWebRtcMessaging({
     } finally {
       startInFlightRef.current = false;
     }
-  }, [
-    conversationId,
-    ensurePeerConnection,
-    normalizedPeerId,
-    normalizedSelfId,
-    setupDataChannel,
-  ]);
-
-  const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current !== null) {
-      window.clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  }, []);
+  }, [conversationId, ensurePeerConnection, sendSignalEnvelope, setupDataChannel]);
 
   useEffect(() => {
-    if (!enabled || !normalizedSelfId || !normalizedPeerId) {
-      stopPolling();
-      void cleanupConnection();
-      setStatus("idle");
-      setError(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const signals = await fetchPendingSignals(
-          normalizedSelfId,
-          sessionIdRef.current ?? undefined,
-        );
-        for (const signal of signals) {
-          if (cancelled) {
-            return;
-          }
-          await handleIncomingSignal(signal);
-        }
-      } catch (pollError) {
-        console.error("Failed to poll WebRTC signals", pollError);
-        if (!cancelled) {
-          setError(
-            pollError instanceof Error
-              ? pollError.message
-              : "Failed to poll WebRTC signals.",
-          );
-          setStatus("error");
-        }
-      }
-    };
-
-    void ensureIceConfig()
-      .then(() => {
-        if (cancelled) {
-          return;
-        }
-        if (isInitiator && !pcRef.current && !startInFlightRef.current) {
-          void startConnection();
-        }
-        void poll();
-        if (pollingIntervalRef.current === null) {
-          pollingIntervalRef.current = window.setInterval(poll, 2000);
-        }
-      })
-      .catch(() => {
-        /* error handled in ensureIceConfig */
-      });
-
-    return () => {
-      cancelled = true;
-      stopPolling();
-    };
-  }, [
-    cleanupConnection,
-    enabled,
-    ensureIceConfig,
-    handleIncomingSignal,
-    isInitiator,
-    normalizedPeerId,
-    normalizedSelfId,
-    startConnection,
-    stopPolling,
-  ]);
-
-  useEffect(() => {
-    if (!enabled || !isInitiator) {
-      return;
-    }
-
     if (
+      !enabled ||
+      !normalizedSelfId ||
+      !normalizedPeerId ||
       status === "connected" ||
       status === "negotiating" ||
       status === "error"
@@ -522,33 +636,32 @@ export function useWebRtcMessaging({
       return;
     }
 
-    if (pcRef.current || startInFlightRef.current) {
-      return;
+    if (isInitiator && !pcRef.current && !startInFlightRef.current) {
+      void startConnection();
     }
-
-    void ensureIceConfig()
-      .then(() => {
-        if (!pcRef.current && !startInFlightRef.current) {
-          void startConnection();
-        }
-      })
-      .catch(() => {
-        /* handled in ensureIceConfig */
-      });
   }, [
     enabled,
-    ensureIceConfig,
     isInitiator,
+    normalizedPeerId,
+    normalizedSelfId,
     startConnection,
     status,
   ]);
 
   useEffect(() => {
     return () => {
-      stopPolling();
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      const socket = wsRef.current;
+      if (socket) {
+        socket.close();
+        wsRef.current = null;
+      }
       void cleanupConnection();
     };
-  }, [cleanupConnection, stopPolling]);
+  }, [cleanupConnection]);
 
   const sendMessage = useCallback(async (message: WebRtcMessage) => {
     const channel = dataChannelRef.current;
@@ -564,6 +677,7 @@ export function useWebRtcMessaging({
 
   return {
     status,
+    socketStatus,
     error,
     sendMessage,
     disconnect,

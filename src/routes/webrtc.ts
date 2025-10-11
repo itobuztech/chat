@@ -1,20 +1,12 @@
 import { Router } from "express";
 import { ObjectId as MongoObjectId } from "mongodb";
 
-import {
-  getSignalsCollection,
-  type WebRTCSignalDocument,
-  type WebRTCSignalType,
-} from "../lib/mongoClient.js";
+import { getSignalsCollection } from "../lib/mongoClient.js";
+import { toApiSignal } from "../utils/formatters.js";
+import { saveSignal } from "../services/signalingService.js";
+import { broadcastSignal } from "../realtime/websocketHub.js";
 
 const router = Router();
-
-const ALLOWED_SIGNAL_TYPES: ReadonlySet<WebRTCSignalType> = new Set([
-  "offer",
-  "answer",
-  "candidate",
-  "bye",
-]);
 
 router.get("/ice-config", (_req, res) => {
   const ttlSeconds = Number.parseInt(process.env.ICE_TTL_SECONDS ?? "3600", 10);
@@ -67,67 +59,13 @@ router.get("/ice-config", (_req, res) => {
 
 router.post("/signals", async (req, res, next) => {
   try {
-    const {
-      sessionId,
-      senderId,
-      recipientId,
-      type,
-      payload,
-    } = req.body as Partial<WebRTCSignalDocument>;
-
-    if (!sessionId || !senderId || !recipientId || !type) {
-      return res.status(400).json({
-        error: "sessionId, senderId, recipientId and type are required.",
-      });
-    }
-
-    if (!ALLOWED_SIGNAL_TYPES.has(type)) {
-      return res.status(400).json({
-        error: `Unsupported signal type "${type}".`,
-      });
-    }
-
-    const trimmedSessionId = sessionId.trim();
-    const trimmedSenderId = senderId.trim();
-    const trimmedRecipientId = recipientId.trim();
-
-    if (!trimmedSessionId || !trimmedSenderId || !trimmedRecipientId) {
-      return res.status(400).json({
-        error: "sessionId, senderId and recipientId cannot be empty.",
-      });
-    }
-
-    const normalizedPayload =
-      type === "bye"
-        ? null
-        : payload && typeof payload === "object"
-          ? (payload as Record<string, unknown>)
-          : null;
-
-    if (type !== "bye" && !normalizedPayload) {
-      return res.status(400).json({
-        error: "Signals (except bye) require a payload object.",
-      });
-    }
-
-    const signals = await getSignalsCollection();
-    const timestamp = new Date();
-    const signal: WebRTCSignalDocument = {
-      sessionId: trimmedSessionId,
-      senderId: trimmedSenderId,
-      recipientId: trimmedRecipientId,
-      type,
-      payload: normalizedPayload,
-      createdAt: timestamp,
-      consumed: false,
-    };
-
-    const result = await signals.insertOne(signal);
-
-    return res.status(201).json({
-      signal: formatSignal({ ...signal, _id: result.insertedId }),
-    });
+    const { document, api } = await saveSignal(req.body);
+    broadcastSignal(api, document.senderId);
+    return res.status(201).json({ signal: api });
   } catch (error) {
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    }
     next(error);
   }
 });
@@ -169,25 +107,11 @@ router.get("/signals/pending/:recipientId", async (req, res, next) => {
     );
 
     return res.json({
-      signals: pendingSignals.map((doc) => formatSignal(doc)),
+      signals: pendingSignals.map((doc) => toApiSignal(doc)),
     });
   } catch (error) {
     next(error);
   }
 });
-
-function formatSignal(doc: WebRTCSignalDocument) {
-  return {
-    id: doc._id?.toString() ?? "",
-    sessionId: doc.sessionId,
-    senderId: doc.senderId,
-    recipientId: doc.recipientId,
-    type: doc.type,
-    payload: doc.payload,
-    createdAt: doc.createdAt.toISOString(),
-    consumed: doc.consumed,
-    consumedAt: doc.consumedAt?.toISOString(),
-  };
-}
 
 export default router;

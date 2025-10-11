@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import {
   API_BASE_URL,
@@ -36,6 +36,7 @@ function App(): JSX.Element {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const previousSocketStatusRef = useRef<string>("disconnected");
 
   const normalizedSelfId = selfId.trim();
   const normalizedPeerId = peerId.trim();
@@ -125,6 +126,7 @@ function App(): JSX.Element {
 
   const {
     status: rtcStatus,
+    socketStatus,
     error: rtcError,
     sendMessage: sendViaRtc,
   } = useWebRtcMessaging({
@@ -134,8 +136,7 @@ function App(): JSX.Element {
     onMessage: appendIncomingMessage,
   });
 
-  const canSendMessage =
-    conversationReady && rtcStatus === "connected" && !isSending;
+  const canSendMessage = conversationReady && !isSending;
 
   const rtcStatusLabels: Record<string, string> = {
     idle: "Idle",
@@ -149,15 +150,19 @@ function App(): JSX.Element {
 
   const rtcStatusLabel = rtcStatusLabels[rtcStatus] ?? rtcStatus;
 
+  const socketStatusLabels: Record<string, string> = {
+    connected: "Connected",
+    connecting: "Connecting",
+    disconnected: "Disconnected",
+  };
+
+  const socketStatusLabel =
+    socketStatusLabels[socketStatus] ?? socketStatus ?? "Unknown";
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!conversationReady) {
       setError("Add both your ID and your peer's ID before sending messages.");
-      return;
-    }
-
-    if (rtcStatus !== "connected") {
-      setError("WebRTC connection is not ready yet. Please wait.");
       return;
     }
 
@@ -185,8 +190,18 @@ function App(): JSX.Element {
         content: persisted.content,
         createdAt: persisted.createdAt,
       };
-      await sendViaRtc(wirePayload);
-      setStatusMessage("Message sent via WebRTC.");
+      let deliveredViaRtc = false;
+      try {
+        await sendViaRtc(wirePayload);
+        deliveredViaRtc = true;
+      } catch (rtcSendError) {
+        console.warn("WebRTC delivery failed, relying on backend queue.", rtcSendError);
+      }
+      setStatusMessage(
+        deliveredViaRtc
+          ? "Message sent via WebRTC."
+          : "Message stored for delivery. Peer will receive it when online.",
+      );
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to send message.";
@@ -195,6 +210,50 @@ function App(): JSX.Element {
       setIsSending(false);
     }
   };
+
+
+  useEffect(() => {
+    if (!conversationReady || socketStatus !== "connected") {
+      previousSocketStatusRef.current = socketStatus;
+      return;
+    }
+
+    if (previousSocketStatusRef.current === "connected") {
+      return;
+    }
+
+    previousSocketStatusRef.current = socketStatus;
+    let cancelled = false;
+
+    const refreshMessages = async () => {
+      try {
+        const conversation = await fetchConversation(
+          normalizedSelfId,
+          normalizedPeerId,
+        );
+        if (!cancelled) {
+          setMessages(conversation);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const message =
+            err instanceof Error ? err.message : "Failed to refresh messages.";
+          setError(message);
+        }
+      }
+    };
+
+    void refreshMessages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    conversationReady,
+    normalizedPeerId,
+    normalizedSelfId,
+    socketStatus,
+  ]);
 
   return (
     <div className="chat-shell">
@@ -242,6 +301,12 @@ function App(): JSX.Element {
             WebRTC status:{" "}
             <span className={`status-pill status-${rtcStatus}`}>
               {rtcStatusLabel}
+            </span>
+          </p>
+          <p className="status info">
+            WebSocket status:{" "}
+            <span className={`status-pill status-${socketStatus}`}>
+              {socketStatusLabel}
             </span>
           </p>
           {isLoading && <p className="status info">Loading conversation…</p>}
@@ -298,11 +363,7 @@ function App(): JSX.Element {
             disabled={!canSendMessage}
           />
           <button type="submit" disabled={!canSendMessage}>
-            {isSending
-              ? "Sending…"
-              : rtcStatus === "connected"
-                ? "Send"
-                : "Connecting…"}
+            {isSending ? "Sending…" : "Send"}
           </button>
         </form>
       </main>

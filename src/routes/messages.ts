@@ -6,22 +6,13 @@ import {
   getMessagesCollection,
   type MessageDocument,
 } from "../lib/mongoClient.js";
+import { toApiMessage } from "../utils/formatters.js";
+import { broadcastNewMessage } from "../realtime/websocketHub.js";
 
 interface SendMessageRequestBody {
   senderId?: string;
   recipientId?: string;
   content?: string;
-}
-
-interface ApiMessage {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  recipientId: string;
-  content: string;
-  createdAt: string;
-  delivered: boolean;
-  deliveredAt?: string;
 }
 
 const router = Router();
@@ -65,9 +56,16 @@ router.post("/", async (req, res, next) => {
     };
 
     const result = await messages.insertOne(message);
+    const storedMessage: MessageDocument & { _id?: ObjectId } = {
+      ...message,
+      _id: result.insertedId,
+    };
+
+    const apiMessage = toApiMessage(storedMessage);
+    broadcastNewMessage(storedMessage);
 
     return res.status(201).json({
-      message: formatMessage({ ...message, _id: result.insertedId }),
+      message: apiMessage,
     });
   } catch (error) {
     next(error);
@@ -114,7 +112,7 @@ router.get("/conversation", async (req, res, next) => {
 
     return res.json({
       messages: results
-        .map((doc) => formatMessage(doc))
+        .map((doc) => toApiMessage(doc))
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     });
   } catch (error) {
@@ -167,7 +165,7 @@ router.get("/pending/:recipientId", async (req, res, next) => {
 
     return res.json({
       messages: pendingMessages.map((doc) => {
-        const formatted = formatMessage(doc);
+        const formatted = toApiMessage(doc);
         return {
           ...formatted,
           delivered: true,
@@ -182,19 +180,6 @@ router.get("/pending/:recipientId", async (req, res, next) => {
 
 function createConversationId(peerA: string, peerB: string): string {
   return [peerA.trim(), peerB.trim()].sort((a, b) => a.localeCompare(b)).join("#");
-}
-
-function formatMessage(doc: MessageDocument & { _id?: ObjectId }): ApiMessage {
-  return {
-    id: doc._id?.toString() ?? "",
-    conversationId: doc.conversationId,
-    senderId: doc.senderId,
-    recipientId: doc.recipientId,
-    content: doc.content,
-    createdAt: doc.createdAt.toISOString(),
-    delivered: doc.delivered,
-    deliveredAt: doc.deliveredAt?.toISOString(),
-  };
 }
 
 export default router;

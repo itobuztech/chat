@@ -6,10 +6,12 @@ import express, {
   type Response,
 } from "express";
 import cors from "cors";
+import { createServer } from "http";
 
 import messagesRouter from "./routes/messages.js";
 import webrtcRouter from "./routes/webrtc.js";
 import { closeDatabase, connectToDatabase } from "./lib/mongoClient.js";
+import { initializeWebSocketServer } from "./realtime/websocketHub.js";
 
 const app = express();
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -46,7 +48,10 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 
 app.use(errorHandler);
 
-const server = app.listen(port, () => {
+const httpServer = createServer(app);
+initializeWebSocketServer(httpServer);
+
+httpServer.listen(port, () => {
   const host = process.env.HOST ?? "localhost";
   console.log(`Server listening at http://${host}:${port}`);
 });
@@ -56,7 +61,7 @@ async function shutdown() {
   await closeDatabase().catch((error) => {
     console.error("Failed to close database connection", error);
   });
-  server.close(() => {
+  httpServer.close(() => {
     process.exit(0);
   });
 }
