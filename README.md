@@ -58,7 +58,9 @@ npm install
 npm run dev
 ```
 
-Set `VITE_API_BASE_URL` in a `.env` file under `webapp/` to point the client to your signaling API (defaults to `http://localhost:3000`). The default page includes a lightweight chat interface that uses the messaging API to poll and post messages between two peer identifiers.
+Set `VITE_API_BASE_URL` in a `.env` file under `webapp/` to point the client to your signaling API (defaults to `http://localhost:3000`). The default page:
+- Loads historical messages via the REST API.
+- Establishes a WebRTC data channel (using the TURN server) so new texts flow peer-to-peer in real time.
 
 ## Messaging API
 The Express server exposes lightweight REST APIs that act as the WebRTC signaling and persistence layer for peer messages.
@@ -84,6 +86,20 @@ Environment variables:
 - `MONGO_URI` (default `mongodb://localhost:27017`) – connection string.
 - `MONGO_DB` (default `p2p-chat`) – database name.
 - `CORS_ALLOW_ORIGINS` – optional comma-separated list of allowed origins for HTTP requests (defaults to permitting all origins).
+- `TURN_HOST` (default resolves to `TURN_PUBLIC_IP`, realm, or `localhost`) – hostname advertised to clients for TURN/STUN.
+- `TURN_PORT` (default `3478`) – listening port exposed for TURN/STUN.
+- `TURN_USERNAME` / `TURN_PASSWORD` / `TURN_REALM` / `TURN_PUBLIC_IP` – credentials surfaced to WebRTC clients. (Public IP is optional but recommended outside localhost.)
+- `ICE_SERVERS_JSON` – optional JSON array override for the ICE server list returned to clients.
+- `ICE_TTL_SECONDS` (default `3600`) – TTL hint for the ICE configuration response.
+
+## WebRTC Signaling API
+WebRTC negotiation is handled via the `/api/webrtc/*` endpoints:
+
+- `GET /api/webrtc/ice-config` – Returns the TURN/STUN list advertised to browsers.
+- `POST /api/webrtc/signals` – Queues offers, answers, candidates, and bye messages between peers.
+- `GET /api/webrtc/signals/pending/:recipientId?sessionId=<id>` – Retrieves and consumes pending signaling payloads.
+
+The frontend automatically negotiates a data channel using these endpoints; messages are persisted through the REST messaging API but delivered live over WebRTC once the connection is established.
 
 ## Linting
 Run the linter to catch common issues:

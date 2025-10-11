@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import {
   API_BASE_URL,
@@ -6,6 +6,9 @@ import {
   fetchConversation,
   sendMessage,
 } from "./lib/messagesApi.js";
+import useWebRtcMessaging, {
+  type WebRtcMessage,
+} from "./hooks/useWebRtcMessaging.js";
 
 const storageKeys = {
   selfId: "p2p-chat:selfId",
@@ -70,58 +73,91 @@ function App(): JSX.Element {
       return;
     }
 
-    let isActive = true;
-    let intervalId: number | undefined;
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
 
-    const load = async (background = false) => {
-      if (!isActive) {
-        return;
-      }
-
-      if (!background) {
-        setIsLoading(true);
-        setError(null);
-      }
-
+    const loadHistory = async () => {
       try {
         const conversation = await fetchConversation(
           normalizedSelfId,
           normalizedPeerId,
         );
-        if (isActive) {
+        if (!cancelled) {
           setMessages(conversation);
         }
       } catch (err) {
-        if (isActive) {
+        if (!cancelled) {
           const message =
             err instanceof Error ? err.message : "Failed to fetch messages.";
           setError(message);
         }
       } finally {
-        if (isActive && !background) {
+        if (!cancelled) {
           setIsLoading(false);
         }
       }
     };
 
-    void load(false);
-
-    intervalId = window.setInterval(() => {
-      void load(true);
-    }, 4000);
+    void loadHistory();
 
     return () => {
-      isActive = false;
-      if (intervalId !== undefined) {
-        window.clearInterval(intervalId);
-      }
+      cancelled = true;
     };
   }, [conversationReady, normalizedPeerId, normalizedSelfId]);
+
+  const appendIncomingMessage = useCallback(
+    (incoming: WebRtcMessage) => {
+      const chatMessage: ChatMessage = {
+        id: incoming.id,
+        conversationId: incoming.conversationId,
+        senderId: incoming.senderId,
+        recipientId: incoming.recipientId,
+        content: incoming.content,
+        createdAt: incoming.createdAt,
+        delivered: true,
+        deliveredAt: incoming.createdAt,
+      };
+      setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
+    },
+    [],
+  );
+
+  const {
+    status: rtcStatus,
+    error: rtcError,
+    sendMessage: sendViaRtc,
+  } = useWebRtcMessaging({
+    selfId: normalizedSelfId,
+    peerId: normalizedPeerId,
+    enabled: conversationReady,
+    onMessage: appendIncomingMessage,
+  });
+
+  const canSendMessage =
+    conversationReady && rtcStatus === "connected" && !isSending;
+
+  const rtcStatusLabels: Record<string, string> = {
+    idle: "Idle",
+    "fetching-ice": "Fetching ICE",
+    waiting: "Waiting for peer",
+    negotiating: "Negotiating",
+    connected: "Connected",
+    disconnected: "Disconnected",
+    error: "Error",
+  };
+
+  const rtcStatusLabel = rtcStatusLabels[rtcStatus] ?? rtcStatus;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!conversationReady) {
       setError("Add both your ID and your peer's ID before sending messages.");
+      return;
+    }
+
+    if (rtcStatus !== "connected") {
+      setError("WebRTC connection is not ready yet. Please wait.");
       return;
     }
 
@@ -134,14 +170,23 @@ function App(): JSX.Element {
     setError(null);
     setStatusMessage(null);
     try {
-      const message = await sendMessage({
+      const persisted = await sendMessage({
         senderId: normalizedSelfId,
         recipientId: normalizedPeerId,
         content,
       });
       setMessageInput("");
-      setMessages((prev) => dedupeAndSort([...prev, message]));
-      setStatusMessage("Message delivered to the signaling server.");
+      setMessages((prev) => dedupeAndSort([...prev, persisted]));
+      const wirePayload: WebRtcMessage = {
+        id: persisted.id,
+        conversationId: persisted.conversationId,
+        senderId: persisted.senderId,
+        recipientId: persisted.recipientId,
+        content: persisted.content,
+        createdAt: persisted.createdAt,
+      };
+      await sendViaRtc(wirePayload);
+      setStatusMessage("Message sent via WebRTC.");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to send message.";
@@ -193,8 +238,15 @@ function App(): JSX.Element {
             </p>
           )}
           {statusMessage && <p className="status ok">{statusMessage}</p>}
+          <p className="status info">
+            WebRTC status:{" "}
+            <span className={`status-pill status-${rtcStatus}`}>
+              {rtcStatusLabel}
+            </span>
+          </p>
           {isLoading && <p className="status info">Loading conversation…</p>}
           {error && <p className="status error">{error}</p>}
+          {rtcError && <p className="status error">WebRTC: {rtcError}</p>}
         </section>
       </aside>
       <main className="chat-main">
@@ -243,10 +295,14 @@ function App(): JSX.Element {
             rows={3}
             value={messageInput}
             onChange={(event) => setMessageInput(event.target.value)}
-            disabled={!conversationReady || isSending}
+            disabled={!canSendMessage}
           />
-          <button type="submit" disabled={!conversationReady || isSending}>
-            {isSending ? "Sending…" : "Send"}
+          <button type="submit" disabled={!canSendMessage}>
+            {isSending
+              ? "Sending…"
+              : rtcStatus === "connected"
+                ? "Send"
+                : "Connecting…"}
           </button>
         </form>
       </main>

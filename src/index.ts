@@ -8,6 +8,7 @@ import express, {
 import cors from "cors";
 
 import messagesRouter from "./routes/messages.js";
+import webrtcRouter from "./routes/webrtc.js";
 import { closeDatabase, connectToDatabase } from "./lib/mongoClient.js";
 
 const app = express();
@@ -32,6 +33,7 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 app.use("/api/messages", messagesRouter);
+app.use("/api/webrtc", webrtcRouter);
 
 const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   console.error(err);

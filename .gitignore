@@ -4,3 +4,5 @@ webapp/node_modules/
 webapp/dist/
 .DS_Store
 *.log
+.tsbuildinfo
+*.tsbuildinfo
