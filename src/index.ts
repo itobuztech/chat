@@ -1,19 +1,52 @@
-import express, { Request, Response } from "express";
-import dotenv from "dotenv";
+import "dotenv/config";
 
-dotenv.config();
+import express, {
+  type ErrorRequestHandler,
+  type Request,
+  type Response,
+} from "express";
+
+import messagesRouter from "./routes/messages.js";
+import { closeDatabase, connectToDatabase } from "./lib/mongoClient.js";
 
 const app = express();
-const port = Number(process.env.PORT) || 3000;
+const port = Number.parseInt(process.env.PORT ?? "3000", 10);
+
+await connectToDatabase();
 
 app.use(express.json());
 
 app.get("/", (_req: Request, res: Response) => {
-  res.json({ message: "Hello from Express + TypeScript!" });
+  res.json({ status: "ok", message: "P2P chat signaling server running." });
 });
 
-app.listen(port, () => {
+app.use("/api/messages", messagesRouter);
+
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error(err);
+  const statusCode =
+    typeof err?.status === "number" ? err.status : Number(err?.statusCode);
+  res
+    .status(Number.isInteger(statusCode) ? Number(statusCode) : 500)
+    .json({ error: "Internal server error" });
+};
+
+app.use(errorHandler);
+
+const server = app.listen(port, () => {
   const host = process.env.HOST ?? "localhost";
-  // Log a friendly startup message so it's easy to tell the server is running.
   console.log(`Server listening at http://${host}:${port}`);
 });
+
+async function shutdown() {
+  console.log("Shutting down gracefully...");
+  await closeDatabase().catch((error) => {
+    console.error("Failed to close database connection", error);
+  });
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

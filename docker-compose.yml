@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    command: >
+      sh -c "turnserver
+      --log-file=stdout
+      --lt-cred-mech
+      --fingerprint
+      --realm=${TURN_REALM:-p2p-chat.local}
+      --user=${TURN_USERNAME:-turnuser}:${TURN_PASSWORD:-turnpassword}
+      ${TURN_PUBLIC_IP:+--external-ip=${TURN_PUBLIC_IP}}
+      --no-multicast-peers
+      --no-cli
+      --min-port=${TURN_MIN_PORT:-49160}
+      --max-port=${TURN_MAX_PORT:-49200}"
+    environment:
+      - TURN_USERNAME=${TURN_USERNAME:-turnuser}
+      - TURN_PASSWORD=${TURN_PASSWORD:-turnpassword}
+      - TURN_REALM=${TURN_REALM:-p2p-chat.local}
+      - TURN_PUBLIC_IP=${TURN_PUBLIC_IP:-}
+      - TURN_MIN_PORT=${TURN_MIN_PORT:-49160}
+      - TURN_MAX_PORT=${TURN_MAX_PORT:-49200}
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}/udp"
+
+  mongodb:
+    image: mongo:6.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-mongo}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-mongoPassword123}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:

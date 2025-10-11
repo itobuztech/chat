@@ -1,0 +1,200 @@
+import { Router } from "express";
+import type { ObjectId } from "mongodb";
+import { ObjectId as MongoObjectId } from "mongodb";
+
+import {
+  getMessagesCollection,
+  type MessageDocument,
+} from "../lib/mongoClient.js";
+
+interface SendMessageRequestBody {
+  senderId?: string;
+  recipientId?: string;
+  content?: string;
+}
+
+interface ApiMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  content: string;
+  createdAt: string;
+  delivered: boolean;
+  deliveredAt?: string;
+}
+
+const router = Router();
+
+router.post("/", async (req, res, next) => {
+  try {
+    const { senderId, recipientId, content } =
+      req.body as SendMessageRequestBody;
+
+    if (!senderId || !recipientId || !content) {
+      return res.status(400).json({
+        error: "senderId, recipientId and content are required.",
+      });
+    }
+
+    const trimmedSender = senderId.trim();
+    const trimmedRecipient = recipientId.trim();
+    const normalizedContent = content.trim();
+
+    if (!trimmedSender || !trimmedRecipient || !normalizedContent) {
+      return res.status(400).json({
+        error: "senderId, recipientId and content cannot be empty.",
+      });
+    }
+
+    const conversationId = createConversationId(
+      trimmedSender,
+      trimmedRecipient,
+    );
+
+    const messages = await getMessagesCollection();
+    const timestamp = new Date();
+
+    const message: MessageDocument = {
+      conversationId,
+      senderId: trimmedSender,
+      recipientId: trimmedRecipient,
+      content: normalizedContent,
+      createdAt: timestamp,
+      delivered: false,
+    };
+
+    const result = await messages.insertOne(message);
+
+    return res.status(201).json({
+      message: formatMessage({ ...message, _id: result.insertedId }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/conversation", async (req, res, next) => {
+  try {
+    const peerA = typeof req.query.peerA === "string" ? req.query.peerA : "";
+    const peerB = typeof req.query.peerB === "string" ? req.query.peerB : "";
+    const limit =
+      typeof req.query.limit === "string" ? Number(req.query.limit) : 50;
+    const beforeId =
+      typeof req.query.before === "string" ? req.query.before : undefined;
+
+    if (!peerA || !peerB) {
+      return res
+        .status(400)
+        .json({ error: "peerA and peerB query params are required." });
+    }
+
+    const maxLimit = Number.isFinite(limit) ? Math.min(Math.abs(limit), 200) : 50;
+
+    const messages = await getMessagesCollection();
+
+    if (beforeId && !MongoObjectId.isValid(beforeId)) {
+      return res.status(400).json({ error: "Invalid before cursor value." });
+    }
+
+    const cursorFilter =
+      beforeId !== undefined
+        ? { _id: { $lt: new MongoObjectId(beforeId) } }
+        : {};
+
+    const results = await messages
+      .find(
+        {
+          conversationId: createConversationId(peerA, peerB),
+          ...cursorFilter,
+        },
+        { sort: { _id: -1 }, limit: maxLimit },
+      )
+      .toArray();
+
+    return res.json({
+      messages: results
+        .map((doc) => formatMessage(doc))
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/pending/:recipientId", async (req, res, next) => {
+  try {
+    const { recipientId } = req.params;
+    if (!recipientId) {
+      return res.status(400).json({ error: "recipientId is required." });
+    }
+
+    const after =
+      typeof req.query.after === "string" ? req.query.after : undefined;
+
+    const messages = await getMessagesCollection();
+
+    if (after && !MongoObjectId.isValid(after)) {
+      return res.status(400).json({ error: "Invalid after cursor value." });
+    }
+
+    const cursorFilter =
+      after !== undefined ? { _id: { $gt: new MongoObjectId(after) } } : {};
+
+    const pendingMessages = await messages
+      .find(
+        {
+          recipientId: recipientId.trim(),
+          delivered: false,
+          ...cursorFilter,
+        },
+        { sort: { createdAt: 1 } },
+      )
+      .toArray();
+
+    if (pendingMessages.length === 0) {
+      return res.json({ messages: [] });
+    }
+
+    const ids = pendingMessages.map((doc) => doc._id).filter(Boolean) as ObjectId[];
+
+    await messages.updateMany(
+      { _id: { $in: ids } },
+      { $set: { delivered: true, deliveredAt: new Date() } },
+    );
+
+    const deliveredAt = new Date();
+
+    return res.json({
+      messages: pendingMessages.map((doc) => {
+        const formatted = formatMessage(doc);
+        return {
+          ...formatted,
+          delivered: true,
+          deliveredAt: formatted.deliveredAt ?? deliveredAt.toISOString(),
+        };
+      }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function createConversationId(peerA: string, peerB: string): string {
+  return [peerA.trim(), peerB.trim()].sort((a, b) => a.localeCompare(b)).join("#");
+}
+
+function formatMessage(doc: MessageDocument & { _id?: ObjectId }): ApiMessage {
+  return {
+    id: doc._id?.toString() ?? "",
+    conversationId: doc.conversationId,
+    senderId: doc.senderId,
+    recipientId: doc.recipientId,
+    content: doc.content,
+    createdAt: doc.createdAt.toISOString(),
+    delivered: doc.delivered,
+    deliveredAt: doc.deliveredAt?.toISOString(),
+  };
+}
+
+export default router;

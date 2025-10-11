@@ -1,4 +1,6 @@
 node_modules/
 dist/
+webapp/node_modules/
+webapp/dist/
 .DS_Store
 *.log
