@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-Set `VITE_API_BASE_URL` in a `.env` file under `webapp/` to point the client to your signaling API (defaults to `http://localhost:3000`).
+Set `VITE_API_BASE_URL` in a `.env` file under `webapp/` to point the client to your signaling API (defaults to `http://localhost:3000`). The default page includes a lightweight chat interface that uses the messaging API to poll and post messages between two peer identifiers.
 
 ## Messaging API
 The Express server exposes lightweight REST APIs that act as the WebRTC signaling and persistence layer for peer messages.
@@ -83,6 +83,7 @@ The Express server exposes lightweight REST APIs that act as the WebRTC signalin
 Environment variables:
 - `MONGO_URI` (default `mongodb://localhost:27017`) – connection string.
 - `MONGO_DB` (default `p2p-chat`) – database name.
+- `CORS_ALLOW_ORIGINS` – optional comma-separated list of allowed origins for HTTP requests (defaults to permitting all origins).
 
 ## Linting
 Run the linter to catch common issues:

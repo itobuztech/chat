@@ -1,6 +1,6 @@
 import { MongoClient, type Collection, type Db, ObjectId } from "mongodb";
 
-const mongoUri = process.env.MONGO_URI ?? "mongodb://localhost:27017";
+const mongoUri = process.env.MONGO_URI ?? "mongodb://mongo:mongoPassword123@localhost:27017/";
 const databaseName = process.env.MONGO_DB ?? "p2p-chat";
 
 const client = new MongoClient(mongoUri);

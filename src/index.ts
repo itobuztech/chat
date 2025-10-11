@@ -5,6 +5,7 @@ import express, {
   type Request,
   type Response,
 } from "express";
+import cors from "cors";
 
 import messagesRouter from "./routes/messages.js";
 import { closeDatabase, connectToDatabase } from "./lib/mongoClient.js";
@@ -13,6 +14,16 @@ const app = express();
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
 
 await connectToDatabase();
+
+const allowedOrigins = process.env.CORS_ALLOW_ORIGINS?.split(",")
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
+
+app.use(
+  cors({
+    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : true,
+  }),
+);
 
 app.use(express.json());
 
