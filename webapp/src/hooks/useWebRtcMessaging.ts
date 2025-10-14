@@ -137,20 +137,25 @@ export function useWebRtcMessaging({
         return;
       }
 
-      const timestamp = Date.now();
-      const payload: MessageStatusUpdate = {
+      const baseTimestamp = Date.now();
+      const basePayload: MessageStatusUpdate = {
         messageId,
         conversationId,
         senderId: normalizedSelfId,
         recipientId: normalizedPeerId,
         status,
-        timestamp,
+        timestamp: baseTimestamp,
       };
+
+      onStatus?.(basePayload);
 
       const channel = dataChannelRef.current;
       if (channel && channel.readyState === "open") {
-        channel.send(JSON.stringify({ kind: "status", payload }));
+        channel.send(JSON.stringify({ kind: "status", payload: basePayload }));
       }
+
+      let persistedPayload: MessageStatusUpdate | null = null;
+      let persisted = false;
 
       const socket = wsRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -159,12 +164,43 @@ export function useWebRtcMessaging({
             type: "messageStatus",
             messageId,
             status,
-            timestamp,
+            timestamp: baseTimestamp,
           }),
         );
+        persisted = true;
       }
 
-      onStatus?.(payload);
+      if (!persisted) {
+        try {
+          const response = await fetch(
+            `${API_BASE_URL}/api/messages/${encodeURIComponent(messageId)}/status`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status }),
+            },
+          );
+          if (response.ok) {
+            const body = (await response.json()) as {
+              status: MessageStatus;
+              timestamp: string;
+            };
+            persistedPayload = {
+              ...basePayload,
+              status: body.status as MessageStatus,
+              timestamp: new Date(body.timestamp).getTime(),
+            };
+          } else {
+            console.error("Failed to persist message status", await response.text());
+          }
+        } catch (error) {
+          console.error("Failed to persist message status", error);
+        }
+      }
+
+      if (persistedPayload && persistedPayload.timestamp !== basePayload.timestamp) {
+        onStatus?.(persistedPayload);
+      }
     },
     [conversationId, normalizedPeerId, normalizedSelfId, onStatus],
   );

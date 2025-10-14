@@ -83,6 +83,8 @@ The Express server exposes lightweight REST APIs that act as the WebRTC signalin
 
 - `GET /api/messages/pending/:recipientId?after=<messageId>`  
   Retrieve undelivered messages for a peer; results are marked as delivered automatically. Optionally pass `after` to only receive items newer than a specific message.
+- `PATCH /api/messages/:messageId/status`  
+  Update a message lifecycle state (`delivered` or `read`). The frontend uses this in combination with WebRTC/WebSocket signaling so every status change is persisted even if the peer is temporarily offline.
 
 Messages are persisted in MongoDB so offline peers can retrieve them when they come back. A WebSocket push delivers new messages instantly when recipients are connected.
 Each message keeps track of `sent`, `delivered`, and `read` timestamps—updates flow over WebRTC when possible, falling back to the WebSocket channel and stored in MongoDB.

@@ -10,6 +10,7 @@ import {
   broadcastMessageStatus,
   broadcastNewMessage,
 } from "../realtime/websocketHub";
+import { updateMessageStatus } from "../services/messageService";
 import { toApiMessage } from "../utils/formatters";
 
 interface SendMessageRequestBody {
@@ -191,6 +192,45 @@ router.get("/pending/:recipientId", async (req, res, next) => {
           deliveredAt: formatted.deliveredAt ?? deliveredAt.toISOString(),
         };
       }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/:messageId/status", async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const status = req.body?.status;
+
+    if (status !== "delivered" && status !== "read") {
+      return res.status(400).json({
+        error: "status must be either 'delivered' or 'read'.",
+      });
+    }
+
+    const result = await updateMessageStatus(messageId, status);
+
+    if (!result) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    const timestamp = result.timestamp.getTime();
+    const apiMessage = toApiMessage(result.after);
+
+    broadcastMessageStatus({
+      messageId: apiMessage.id,
+      conversationId: apiMessage.conversationId,
+      senderId: apiMessage.senderId,
+      recipientId: apiMessage.recipientId,
+      status,
+      timestamp,
+    });
+
+    return res.json({
+      message: apiMessage,
+      status,
+      timestamp: new Date(timestamp).toISOString(),
     });
   } catch (error) {
     next(error);
