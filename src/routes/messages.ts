@@ -68,7 +68,7 @@ router.post("/", async (req, res, next) => {
       }
 
       const replyMessage = await messages.findOne({
-        _id: new ObjectId(replyToId),
+        _id: new ObjectId(replyToId as string),
       });
 
       if (!replyMessage) {
@@ -125,13 +125,13 @@ router.get("/conversation", async (req, res, next) => {
 
     const messages = await getMessagesCollection();
 
-    if (beforeId && !MongoObjectId.isValid(beforeId)) {
+    if (beforeId && !ObjectId.isValid(beforeId)) {
       return res.status(400).json({ error: "Invalid before cursor value." });
     }
 
     const cursorFilter =
       beforeId !== undefined
-        ? { _id: { $lt: new MongoObjectId(beforeId) } }
+        ? { _id: { $lt: new ObjectId(beforeId) } }
         : {};
 
     const results = await messages
@@ -166,12 +166,12 @@ router.get("/pending/:recipientId", async (req, res, next) => {
 
     const messages = await getMessagesCollection();
 
-    if (after && !MongoObjectId.isValid(after)) {
+    if (after && !ObjectId.isValid(after)) {
       return res.status(400).json({ error: "Invalid after cursor value." });
     }
 
     const cursorFilter =
-      after !== undefined ? { _id: { $gt: new MongoObjectId(after) } } : {};
+      after !== undefined ? { _id: { $gt: new ObjectId(after) } } : {};
 
     const pendingMessages = await messages
       .find(
