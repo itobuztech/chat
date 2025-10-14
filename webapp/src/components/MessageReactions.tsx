@@ -1,5 +1,9 @@
-import { useState } from "react";
-import { addReaction, removeReaction, type ChatMessage } from "../lib/messagesApi";
+import { useState } from "react"
+
+import { addReaction, removeReaction, type ChatMessage } from "../lib/messagesApi"
+import { Button } from "./ui/button"
+import { Badge } from "./ui/badge"
+import { cn } from "../lib/utils"
 
 interface MessageReactionsProps {
   message: ChatMessage;
@@ -36,48 +40,55 @@ export function MessageReactions({ message, currentUserId, onReactionUpdate }: M
     }
   };
 
-  const reactions = message.reactions || {};
-  const hasReactions = Object.keys(reactions).length > 0;
+  const reactions = message.reactions || {}
+  const hasReactions = Object.keys(reactions).length > 0
 
   return (
-    <div className="message-reactions">
+    <div className="flex flex-col items-end gap-2 text-xs">
       {hasReactions && (
-        <div className="reactions-display">
+        <div className="flex flex-wrap gap-2">
           {Object.entries(reactions).map(([emoji, data]) => {
             const userHasReacted = data.userIds.includes(currentUserId);
             return (
-              <button
+              <Button
                 key={emoji}
-                className={`reaction-button ${userHasReacted ? "user-reacted" : ""}`}
+                variant={userHasReacted ? "secondary" : "ghost"}
+                size="xs"
                 onClick={() => handleReactionClick(emoji)}
                 disabled={isUpdating}
                 title={`${data.userIds.join(", ")} reacted with ${emoji}`}
               >
-                <span className="reaction-emoji">{emoji}</span>
-                <span className="reaction-count">{data.count}</span>
-              </button>
+                <span className="mr-1 text-base">{emoji}</span>
+                <Badge variant={userHasReacted ? "default" : "muted"}>{data.count}</Badge>
+              </Button>
             );
           })}
         </div>
       )}
       
-      <div className="reaction-controls">
-        <button
-          className="add-reaction-button"
+      <div className="relative">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
           title="Add reaction"
+          disabled={isUpdating}
         >
-          😊
-        </button>
+          😊 Add reaction
+        </Button>
         
         {showEmojiPicker && (
-          <div className="emoji-picker">
+          <div className="absolute right-0 z-10 mt-2 flex w-40 flex-wrap gap-2 rounded-lg border border-border/60 bg-popover p-3 shadow-lg">
             {COMMON_EMOJIS.map((emoji) => (
               <button
                 key={emoji}
-                className="emoji-option"
                 onClick={() => handleReactionClick(emoji)}
                 disabled={isUpdating}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-lg transition-colors hover:border-border/60 hover:bg-muted/50",
+                  isUpdating && "opacity-60",
+                )}
               >
                 {emoji}
               </button>

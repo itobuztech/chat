@@ -1,170 +1,187 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageReactions } from "./components/MessageReactions";
-import "./App.css";
 import {
-  API_BASE_URL,
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
+import { Loader2, MessageSquareReply, Send, X } from "lucide-react"
+
+import {
   type ChatMessage,
   type ConversationSummary,
   fetchConversation,
   fetchConversations,
   sendMessage,
-} from "./lib/messagesApi.js";
+} from "./lib/messagesApi"
 import useWebRtcMessaging, {
   type MessageStatusUpdate,
   type WebRtcMessage,
-} from "./hooks/useWebRtcMessaging.js";
+} from "./hooks/useWebRtcMessaging"
+import { Button } from "./components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card"
+import { Badge } from "./components/ui/badge"
+import { Input } from "./components/ui/input"
+import { ScrollArea } from "./components/ui/scroll-area"
+import { Textarea } from "./components/ui/textarea"
+import { cn } from "./lib/utils"
 
 const storageKeys = {
   selfId: "p2p-chat:selfId",
   peerId: "p2p-chat:peerId",
-};
+}
 
 function App(): JSX.Element {
   const [selfId, setSelfId] = useState(() => {
     if (typeof window === "undefined") {
-      return "";
+      return ""
     }
-
-    return window.localStorage.getItem(storageKeys.selfId) ?? "";
-  });
+    return window.localStorage.getItem(storageKeys.selfId) ?? ""
+  })
   const [peerId, setPeerId] = useState(() => {
     if (typeof window === "undefined") {
-      return "";
+      return ""
     }
+    return window.localStorage.getItem(storageKeys.peerId) ?? ""
+  })
+  const [messageInput, setMessageInput] = useState("")
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSending, setIsSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [isConversationsLoading, setIsConversationsLoading] = useState(false)
+  const [conversationsError, setConversationsError] = useState<string | null>(null)
+  const [peerTyping, setPeerTyping] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
 
-    return window.localStorage.getItem(storageKeys.peerId) ?? "";
-  });
-  const [messageInput, setMessageInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [isConversationsLoading, setIsConversationsLoading] = useState(false);
-  const [conversationsError, setConversationsError] = useState<string | null>(null);
-  const [peerTyping, setPeerTyping] = useState(false);
-  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
-  const typingTimeoutRef = useRef<number | null>(null);
-  const typingActiveRef = useRef(false);
-  const peerTypingTimeoutRef = useRef<number | null>(null);
-  const readAckedRef = useRef<Set<string>>(new Set());
-  const previousSocketStatusRef = useRef<string>("disconnected");
+  const typingTimeoutRef = useRef<number | null>(null)
+  const typingActiveRef = useRef(false)
+  const peerTypingTimeoutRef = useRef<number | null>(null)
+  const readAckedRef = useRef<Set<string>>(new Set())
+  const previousSocketStatusRef = useRef<string>("disconnected")
 
-  const normalizedSelfId = selfId.trim();
-  const normalizedPeerId = peerId.trim();
+  const normalizedSelfId = selfId.trim()
+  const normalizedPeerId = peerId.trim()
   const conversationReady =
-    normalizedSelfId.length > 0 && normalizedPeerId.length > 0;
+    normalizedSelfId.length > 0 && normalizedPeerId.length > 0
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(storageKeys.selfId, selfId);
+      window.localStorage.setItem(storageKeys.selfId, selfId)
     }
-  }, [selfId]);
+  }, [selfId])
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(storageKeys.peerId, peerId);
+      window.localStorage.setItem(storageKeys.peerId, peerId)
     }
-  }, [peerId]);
+  }, [peerId])
 
-  const sortedMessages = useMemo(() => {
-    return [...messages].sort(
-      (a, b) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
-  }, [messages]);
+  const sortedMessages = useMemo(
+    () =>
+      [...messages].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      ),
+    [messages],
+  )
 
   const loadConversations = useCallback(async () => {
     if (!normalizedSelfId) {
-      setConversations([]);
-      setConversationsError(null);
-      setIsConversationsLoading(false);
-      return;
+      setConversations([])
+      setConversationsError(null)
+      setIsConversationsLoading(false)
+      return
     }
 
-    setConversationsError(null);
-    setIsConversationsLoading(true);
+    setConversationsError(null)
+    setIsConversationsLoading(true)
     try {
-      const list = await fetchConversations(normalizedSelfId);
-      setConversations(list);
+      const list = await fetchConversations(normalizedSelfId)
+      setConversations(list)
     } catch (loadError) {
       const message =
         loadError instanceof Error
           ? loadError.message
-          : "Failed to load conversations.";
-      setConversationsError(message);
+          : "Failed to load conversations."
+      setConversationsError(message)
     } finally {
-      setIsConversationsLoading(false);
+      setIsConversationsLoading(false)
     }
-  }, [normalizedSelfId]);
+  }, [normalizedSelfId])
 
   useEffect(() => {
     if (typeof window === "undefined") {
-      return;
+      return
     }
 
     if (!conversationReady) {
-      setMessages([]);
-      setStatusMessage(null);
-      setIsLoading(false);
-      setReplyingTo(null);
-      return;
+      setMessages([])
+      setStatusMessage(null)
+      setIsLoading(false)
+      setReplyingTo(null)
+      return
     }
 
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
 
     const loadHistory = async () => {
       try {
         const conversation = await fetchConversation(
           normalizedSelfId,
           normalizedPeerId,
-        );
+        )
         if (!cancelled) {
-          setMessages(conversation);
+          setMessages(conversation)
         }
       } catch (err) {
         if (!cancelled) {
           const message =
-            err instanceof Error ? err.message : "Failed to fetch messages.";
-          setError(message);
+            err instanceof Error ? err.message : "Failed to fetch messages."
+          setError(message)
         }
       } finally {
         if (!cancelled) {
-          setIsLoading(false);
+          setIsLoading(false)
         }
       }
-    };
+    }
 
-    void loadHistory();
+    void loadHistory()
 
     return () => {
-      cancelled = true;
-    };
-  }, [conversationReady, normalizedPeerId, normalizedSelfId]);
+      cancelled = true
+    }
+  }, [conversationReady, normalizedPeerId, normalizedSelfId])
 
   useEffect(() => {
-    void loadConversations();
-  }, [loadConversations, normalizedSelfId]);
+    void loadConversations()
+  }, [loadConversations, normalizedSelfId])
 
-  const handlePeerTyping = useCallback(
-    (typing: boolean) => {
-      setPeerTyping(typing);
-      if (peerTypingTimeoutRef.current !== null) {
-        window.clearTimeout(peerTypingTimeoutRef.current);
-        peerTypingTimeoutRef.current = null;
-      }
-      if (typing) {
-        peerTypingTimeoutRef.current = window.setTimeout(() => {
-          setPeerTyping(false);
-          peerTypingTimeoutRef.current = null;
-        }, 4000);
-      }
-    },
-    [],
-  );
+  const handlePeerTyping = useCallback((typing: boolean) => {
+    setPeerTyping(typing)
+    if (peerTypingTimeoutRef.current !== null) {
+      window.clearTimeout(peerTypingTimeoutRef.current)
+      peerTypingTimeoutRef.current = null
+    }
+    if (typing) {
+      peerTypingTimeoutRef.current = window.setTimeout(() => {
+        setPeerTyping(false)
+        peerTypingTimeoutRef.current = null
+      }, 4000)
+    }
+  }, [])
 
   const appendIncomingMessage = useCallback(
     (incoming: WebRtcMessage) => {
@@ -180,43 +197,43 @@ function App(): JSX.Element {
         read: incoming.read ?? false,
         readAt: incoming.readAt,
         replyTo: incoming.replyTo,
-      };
-      setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
-      handlePeerTyping(false);
-      void loadConversations();
+      }
+      setMessages((prev) => dedupeAndSort([...prev, chatMessage]))
+      handlePeerTyping(false)
+      void loadConversations()
     },
     [handlePeerTyping, loadConversations],
-  );
+  )
 
   const handleStatusUpdate = useCallback(
     (update: MessageStatusUpdate) => {
       if (update.status === "sent") {
-        return;
+        return
       }
       setMessages((prev) =>
         prev.map((message) => {
           if (message.id !== update.messageId) {
-            return message;
+            return message
           }
-          const next = { ...message };
+          const next = { ...message }
           if (update.status === "delivered") {
-            next.delivered = true;
-            next.deliveredAt = new Date(update.timestamp).toISOString();
+            next.delivered = true
+            next.deliveredAt = new Date(update.timestamp).toISOString()
           }
           if (update.status === "read") {
-            next.read = true;
-            next.readAt = new Date(update.timestamp).toISOString();
-            next.delivered = true;
-            next.deliveredAt = next.deliveredAt ?? next.readAt;
-            readAckedRef.current.add(update.messageId);
+            next.read = true
+            next.readAt = new Date(update.timestamp).toISOString()
+            next.delivered = true
+            next.deliveredAt = next.deliveredAt ?? next.readAt
+            readAckedRef.current.add(update.messageId)
           }
-          return next;
+          return next
         }),
-      );
-      void loadConversations();
+      )
+      void loadConversations()
     },
     [loadConversations],
-  );
+  )
 
   const {
     status: rtcStatus,
@@ -233,168 +250,167 @@ function App(): JSX.Element {
     onMessage: appendIncomingMessage,
     onTyping: handlePeerTyping,
     onStatus: handleStatusUpdate,
-  });
+  })
 
-  const isMessageEmpty = messageInput.trim().length === 0;
-  const canSendMessage = conversationReady && !isSending && !isMessageEmpty;
+  const isMessageEmpty = messageInput.trim().length === 0
+  const canSendMessage = conversationReady && !isSending && !isMessageEmpty
 
-  const rtcStatusLabels: Record<string, string> = {
-    idle: "Idle",
-    "fetching-ice": "Fetching ICE",
-    waiting: "Waiting for peer",
-    negotiating: "Negotiating",
-    connected: "Connected",
-    disconnected: "Disconnected",
-    error: "Error",
-  };
+  const rtcStatusLabel = useMemo(() => {
+    switch (rtcStatus) {
+      case "fetching-ice":
+        return "Fetching ICE"
+      case "waiting":
+        return "Waiting"
+      case "negotiating":
+        return "Negotiating"
+      default:
+        return rtcStatus.charAt(0).toUpperCase() + rtcStatus.slice(1)
+    }
+  }, [rtcStatus])
 
-  const rtcStatusLabel = rtcStatusLabels[rtcStatus] ?? rtcStatus;
-
-  const socketStatusLabels: Record<string, string> = {
-    connected: "Connected",
-    connecting: "Connecting",
-    disconnected: "Disconnected",
-  };
-
-  const socketStatusLabel =
-    socketStatusLabels[socketStatus] ?? socketStatus ?? "Unknown";
-
-  const dataChannelLabel = dataChannelReady ? "Open" : "Closed";
-  const dataChannelStatusClass = dataChannelReady ? "status-open" : "status-closed";
+  const socketStatusLabel = useMemo(() => {
+    switch (socketStatus) {
+      case "connected":
+        return "Connected"
+      case "connecting":
+        return "Connecting"
+      case "disconnected":
+      default:
+        return "Disconnected"
+    }
+  }, [socketStatus])
 
   const getMessageStatusLabel = useCallback(
     (message: ChatMessage): { label: string; className: string } | null => {
       if (message.senderId !== normalizedSelfId) {
-        return null;
+        return null
       }
-
       if (message.read) {
-        return { label: "Read", className: "read" };
+        return { label: "Read", className: "text-sky-400" }
       }
-
       if (message.delivered) {
-        return { label: "Delivered", className: "delivered" };
+        return { label: "Delivered", className: "text-sky-200" }
       }
-
-      return { label: "Sent", className: "sent" };
+      return { label: "Sent", className: "text-muted-foreground" }
     },
     [normalizedSelfId],
-  );
+  )
 
   const formatConversationPreview = useCallback((content: string): string => {
-    const normalized = content.trim().replace(/\s+/g, " ");
+    const normalized = content.trim().replace(/\s+/g, " ")
     if (!normalized) {
-      return "(no content)";
+      return "(no content)"
     }
-    return normalized.length > 48 ? `${normalized.slice(0, 48)}…` : normalized;
-  }, []);
+    return normalized.length > 48 ? `${normalized.slice(0, 48)}…` : normalized
+  }, [])
 
   const formatConversationTime = useCallback((iso: string): string => {
-    const date = new Date(iso);
+    const date = new Date(iso)
     if (Number.isNaN(date.getTime())) {
-      return "";
+      return ""
     }
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }, []);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  }, [])
 
   const handleStartReply = useCallback((message: ChatMessage) => {
-    setReplyingTo(message);
-  }, []);
+    setReplyingTo(message)
+  }, [])
 
   const handleCancelReply = useCallback(() => {
-    setReplyingTo(null);
-  }, []);
+    setReplyingTo(null)
+  }, [])
 
   const handleSelectConversation = useCallback(
     (summary: ConversationSummary) => {
-      setPeerId(summary.peerId);
-      setStatusMessage(null);
-      setError(null);
-      setReplyingTo(null);
-      setMessageInput("");
+      setPeerId(summary.peerId)
+      setStatusMessage(null)
+      setError(null)
+      setReplyingTo(null)
+      setMessageInput("")
     },
     [],
-  );
+  )
 
   const handleMessageChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
-      const value = event.target.value;
-      setMessageInput(value);
-      setStatusMessage(null);
+      const value = event.target.value
+      setMessageInput(value)
+      setStatusMessage(null)
 
       if (!conversationReady) {
-        return;
+        return
       }
 
       if (!typingActiveRef.current) {
-        typingActiveRef.current = true;
-        void sendTyping(true);
+        typingActiveRef.current = true
+        void sendTyping(true)
       }
 
       if (typingTimeoutRef.current !== null) {
-        window.clearTimeout(typingTimeoutRef.current);
+        window.clearTimeout(typingTimeoutRef.current)
       }
 
       typingTimeoutRef.current = window.setTimeout(() => {
-        typingActiveRef.current = false;
-        void sendTyping(false);
-        typingTimeoutRef.current = null;
-      }, 2000);
+        typingActiveRef.current = false
+        void sendTyping(false)
+        typingTimeoutRef.current = null
+      }, 2000)
     },
     [conversationReady, sendTyping],
-  );
+  )
 
   const handleInputBlur = useCallback(() => {
     if (!conversationReady) {
-      return;
+      return
     }
 
     if (typingTimeoutRef.current !== null) {
-      window.clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = null;
+      window.clearTimeout(typingTimeoutRef.current)
+      typingTimeoutRef.current = null
     }
 
     if (typingActiveRef.current) {
-      typingActiveRef.current = false;
-      void sendTyping(false);
+      typingActiveRef.current = false
+      void sendTyping(false)
     }
-  }, [conversationReady, sendTyping]);
+  }, [conversationReady, sendTyping])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+    event.preventDefault()
     if (!conversationReady) {
-      setError("Add both your ID and your peer's ID before sending messages.");
-      return;
+      setError("Add both your ID and your peer's ID before sending messages.")
+      return
     }
 
-    const content = messageInput.trim();
+    const content = messageInput.trim()
     if (!content) {
-      return;
+      return
     }
 
     if (typingTimeoutRef.current !== null) {
-      window.clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = null;
+      window.clearTimeout(typingTimeoutRef.current)
+      typingTimeoutRef.current = null
     }
     if (typingActiveRef.current) {
-      typingActiveRef.current = false;
-      void sendTyping(false);
+      typingActiveRef.current = false
+      void sendTyping(false)
     }
-    handlePeerTyping(false);
+    handlePeerTyping(false)
 
-    setIsSending(true);
-    setError(null);
-    setStatusMessage(null);
+    setIsSending(true)
+    setError(null)
+    setStatusMessage(null)
     try {
       const persisted = await sendMessage({
         senderId: normalizedSelfId,
         recipientId: normalizedPeerId,
         content,
         replyToId: replyingTo?.id,
-      });
-      setMessageInput("");
-      setReplyingTo(null);
-      setMessages((prev) => dedupeAndSort([...prev, persisted]));
+      })
+      setMessageInput("")
+      setReplyingTo(null)
+      setMessages((prev) => dedupeAndSort([...prev, persisted]))
+
       const wirePayload: WebRtcMessage = {
         id: persisted.id,
         conversationId: persisted.conversationId,
@@ -407,103 +423,86 @@ function App(): JSX.Element {
         read: persisted.read,
         readAt: persisted.readAt,
         replyTo: persisted.replyTo,
-      };
-      let deliveredViaRtc = false;
+      }
+      let deliveredViaRtc = false
       try {
-        await sendViaRtc(wirePayload);
-        deliveredViaRtc = true;
+        await sendViaRtc(wirePayload)
+        deliveredViaRtc = true
       } catch (rtcSendError) {
-        console.warn("WebRTC delivery failed, relying on backend queue.", rtcSendError);
+        console.warn(
+          "WebRTC delivery failed, relying on backend queue.",
+          rtcSendError,
+        )
       }
       setStatusMessage(
         deliveredViaRtc
           ? "Message sent via WebRTC."
           : "Message stored for delivery. Peer will receive it when online.",
-      );
-      void loadConversations();
+      )
+      void loadConversations()
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Failed to send message.";
-      setError(message);
+        err instanceof Error ? err.message : "Failed to send message."
+      setError(message)
     } finally {
-      setIsSending(false);
+      setIsSending(false)
     }
-  };
+  }
 
   useEffect(() => {
     if (!conversationReady) {
       if (typingTimeoutRef.current !== null) {
-        window.clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = null;
+        window.clearTimeout(typingTimeoutRef.current)
+        typingTimeoutRef.current = null
       }
-      typingActiveRef.current = false;
-      void sendTyping(false);
-      handlePeerTyping(false);
+      typingActiveRef.current = false
+      void sendTyping(false)
+      handlePeerTyping(false)
     }
-  }, [conversationReady, handlePeerTyping, sendTyping]);
-
-  useEffect(() => {
-    return () => {
-      if (typingTimeoutRef.current !== null) {
-        window.clearTimeout(typingTimeoutRef.current);
-      }
-      if (peerTypingTimeoutRef.current !== null) {
-        window.clearTimeout(peerTypingTimeoutRef.current);
-      }
-      typingActiveRef.current = false;
-      void sendTyping(false);
-      handlePeerTyping(false);
-    };
-  }, [handlePeerTyping, sendTyping]);
-
+  }, [conversationReady, handlePeerTyping, sendTyping])
 
   useEffect(() => {
     if (!conversationReady || socketStatus !== "connected") {
-      previousSocketStatusRef.current = socketStatus;
-      return;
+      previousSocketStatusRef.current = socketStatus
+      return
     }
 
     if (previousSocketStatusRef.current === "connected") {
-      return;
+      return
     }
 
-    previousSocketStatusRef.current = socketStatus;
-    let cancelled = false;
+    previousSocketStatusRef.current = socketStatus
+    let cancelled = false
 
     const refreshMessages = async () => {
       try {
         const conversation = await fetchConversation(
           normalizedSelfId,
           normalizedPeerId,
-        );
+        )
         if (!cancelled) {
-          setMessages(conversation);
+          setMessages(conversation)
         }
       } catch (err) {
         if (!cancelled) {
           const message =
-            err instanceof Error ? err.message : "Failed to refresh messages.";
-          setError(message);
+            err instanceof Error ? err.message : "Failed to refresh messages."
+          setError(message)
         }
       }
-    };
+    }
 
-    void refreshMessages();
+    void refreshMessages()
 
     return () => {
-      cancelled = true;
-    };
-  }, [
-    conversationReady,
-    normalizedPeerId,
-    normalizedSelfId,
-    socketStatus,
-  ]);
+      cancelled = true
+    }
+  }, [conversationReady, normalizedPeerId, normalizedSelfId, socketStatus])
 
   useEffect(() => {
     if (!conversationReady) {
-      readAckedRef.current.clear();
-      return;
+      readAckedRef.current.clear()
+      return
     }
 
     sortedMessages.forEach((message) => {
@@ -512,264 +511,346 @@ function App(): JSX.Element {
         !message.read &&
         !readAckedRef.current.has(message.id)
       ) {
-        readAckedRef.current.add(message.id);
-        void sendStatus(message.id, "read");
+        readAckedRef.current.add(message.id)
+        void sendStatus(message.id, "read")
       }
-    });
-  }, [
-    conversationReady,
-    normalizedSelfId,
-    sendStatus,
-    sortedMessages,
-  ]);
+    })
+  }, [conversationReady, normalizedSelfId, sendStatus, sortedMessages])
 
   useEffect(() => {
-    readAckedRef.current.clear();
-  }, [normalizedPeerId, normalizedSelfId]);
+    readAckedRef.current.clear()
+  }, [normalizedPeerId, normalizedSelfId])
+
+  const dataChannelLabel = dataChannelReady ? "Open" : "Closed"
+  const dataChannelStatusClass = dataChannelReady ? "bg-emerald-500/20 text-emerald-300" : "bg-muted text-muted-foreground"
 
   return (
-    <div className="chat-shell">
-      <aside className="chat-sidebar">
-        <header>
-          <h1>P2P Chat</h1>
-          <p className="description">
-            Configure participant identifiers to start exchanging messages
-            through the signaling API.
-          </p>
-        </header>
-        <div className="field-group">
-          <label htmlFor="selfId">Your ID</label>
-          <input
-            id="selfId"
-            name="selfId"
-            type="text"
-            placeholder="e.g. alice"
-            value={selfId}
-            onChange={(event) => setSelfId(event.target.value)}
-          />
-        </div>
-        <div className="field-group">
-          <label htmlFor="peerId">Peer ID</label>
-          <input
-            id="peerId"
-            name="peerId"
-            type="text"
-            placeholder="e.g. bob"
-            value={peerId}
-            onChange={(event) => setPeerId(event.target.value)}
-          />
-        </div>
-        <section className="status-panel">
-          <p>
-            Backend: <code>{API_BASE_URL}</code>
-          </p>
-          {!conversationReady && (
-            <p className="hint">
-              Enter both IDs to load the conversation and start chatting.
-            </p>
-          )}
-          {statusMessage && <p className="status ok">{statusMessage}</p>}
-          <p className="status info">
-            WebRTC status:{" "}
-            <span className={`status-pill status-${rtcStatus}`}>
-              {rtcStatusLabel}
-            </span>
-          </p>
-          <p className="status info">
-            Data channel:{" "}
-            <span className={`status-pill ${dataChannelStatusClass}`}>
-              {dataChannelLabel}
-            </span>
-          </p>
-          <p className="status info">
-            WebSocket status:{" "}
-            <span className={`status-pill status-${socketStatus}`}>
-              {socketStatusLabel}
-            </span>
-          </p>
-          {isLoading && <p className="status info">Loading conversation…</p>}
-          {error && <p className="status error">{error}</p>}
-          {rtcError && <p className="status error">WebRTC: {rtcError}</p>}
-        </section>
-        <section className="conversation-list">
-          <div className="conversation-list-header">
-            <h3>Conversations</h3>
-            {isConversationsLoading && <span className="conversation-loading">Loading…</span>}
-          </div>
-          {conversationsError && (
-            <p className="status error">{conversationsError}</p>
-          )}
-          {!isConversationsLoading && conversations.length === 0 ? (
-            <p className="hint">No conversations yet.</p>
-          ) : (
-            <ul className="conversation-items">
-              {conversations.map((conversation) => {
-                const active = conversation.peerId === normalizedPeerId;
-                const replyPreview = conversation.lastMessage.replyTo
-                  ? `↪ ${formatConversationPreview(conversation.lastMessage.replyTo.content)} `
-                  : "";
-                const preview = `${replyPreview}${formatConversationPreview(
-                  conversation.lastMessage.content,
-                )}`;
-                const displayTime = formatConversationTime(
-                  conversation.lastMessage.createdAt,
-                );
-                const unread = conversation.unreadCount;
-                return (
-                  <li key={conversation.conversationId}>
-                    <button
-                      type="button"
-                      className={`conversation-item ${active ? "active" : ""}`}
-                      onClick={() => handleSelectConversation(conversation)}
-                    >
-                      <div className="conversation-item-header">
-                        <span className="conversation-peer">{conversation.peerId}</span>
-                        <time className="conversation-time">{displayTime}</time>
-                      </div>
-                      <div className="conversation-item-body">
-                        <span className="conversation-preview">{preview}</span>
-                        {unread > 0 && (
-                          <span className="conversation-unread">{unread}</span>
-                        )}
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      </aside>
-      <main className="chat-main">
-        <header className="chat-header">
-          <h2>
-            {conversationReady
-              ? `Conversation: ${normalizedSelfId} ↔ ${normalizedPeerId}`
-              : "Waiting for participants…"}
-          </h2>
-        </header>
-        <section className="chat-messages" aria-live="polite">
-          {!conversationReady && (
-            <div className="empty-state">
-              <p>Set your identifiers to begin.</p>
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex h-screen max-w-6xl flex-col gap-4 p-4 md:flex-row">
+        <Card className="flex h-full flex-col md:w-80">
+          <CardHeader className="space-y-4">
+            <div>
+              <CardTitle className="text-xl">P2P Chat</CardTitle>
+              <CardDescription>
+                Configure your identifiers, monitor connection health, and pick a
+                conversation to start chatting.
+              </CardDescription>
             </div>
-          )}
-          {conversationReady && sortedMessages.length === 0 && !isLoading && (
-            <div className="empty-state">
-              <p>No messages yet. Say hello!</p>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Your ID
+                </span>
+                <Input
+                  value={selfId}
+                  placeholder="alice"
+                  onChange={(event) => setSelfId(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Peer ID
+                </span>
+                <Input
+                  value={peerId}
+                  placeholder="bob"
+                  onChange={(event) => setPeerId(event.target.value)}
+                />
+              </div>
             </div>
-          )}
-          {sortedMessages.map((message) => {
-            const isMine = message.senderId === normalizedSelfId;
-            const statusInfo = getMessageStatusLabel(message);
-            return (
-              <article
-                key={message.id}
-                className={`message ${isMine ? "mine" : "theirs"}`}
-              >
-                <div className="message-meta">
-                  <span className="author">
-                    {isMine ? "You" : message.senderId}
-                  </span>
-                  <time dateTime={message.createdAt}>
-                    {new Date(message.createdAt).toLocaleTimeString()}
-                  </time>
+          </CardHeader>
+          <CardContent className="flex flex-1 flex-col gap-4 overflow-hidden">
+            <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/30 p-3 text-xs">
+              <StatusRow label="WebRTC" value={rtcStatusLabel} />
+              <StatusRow label="Data Channel" value={dataChannelLabel} badgeClassName={dataChannelStatusClass} />
+              <StatusRow label="WebSocket" value={socketStatusLabel} />
+            </div>
+
+            {statusMessage && (
+              <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary-foreground/80">
+                {statusMessage}
+              </div>
+            )}
+            {error && (
+              <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            )}
+            {rtcError && (
+              <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                {rtcError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <span>Conversations</span>
+              {isConversationsLoading && (
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading
+                </span>
+              )}
+            </div>
+
+            <div className="relative flex-1">
+              <ScrollArea className="absolute inset-0">
+                <div className="space-y-1">
+                  {conversationsError && (
+                    <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                      {conversationsError}
+                    </div>
+                  )}
+                  {!isConversationsLoading &&
+                  conversationsError === null &&
+                  conversations.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No conversations yet.
+                    </p>
+                  ) : (
+                    conversations.map((conversation) => {
+                      const active = conversation.peerId === normalizedPeerId
+                      const replyPreview = conversation.lastMessage.replyTo
+                        ? `↪ ${formatConversationPreview(conversation.lastMessage.replyTo.content)} `
+                        : ""
+                      const preview = `${replyPreview}${formatConversationPreview(
+                        conversation.lastMessage.content,
+                      )}`
+                      const displayTime = formatConversationTime(
+                        conversation.lastMessage.createdAt,
+                      )
+                      const unread = conversation.unreadCount
+                      return (
+                        <Button
+                          type="button"
+                          key={conversation.conversationId}
+                          variant={active ? "secondary" : "ghost"}
+                          className="w-full justify-start rounded-xl px-3 py-3 text-left"
+                          onClick={() => handleSelectConversation(conversation)}
+                        >
+                          <div className="flex w-full flex-col gap-1">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span className="font-semibold text-foreground">
+                                {conversation.peerId}
+                              </span>
+                              <span>{displayTime}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <span className="line-clamp-1">{preview}</span>
+                              {unread > 0 && (
+                                <Badge variant="muted">{unread}</Badge>
+                              )}
+                            </div>
+                          </div>
+                        </Button>
+                      )
+                    })
+                  )}
                 </div>
-                {message.replyTo && (
-                  <div className="message-reply-preview">
-                    <span className="reply-author">
-                      {message.replyTo.senderId === normalizedSelfId
-                        ? "You"
-                        : message.replyTo.senderId}
+              </ScrollArea>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="flex h-full flex-1 flex-col">
+          <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle className="text-lg">
+                {conversationReady
+                  ? `Conversation: ${normalizedSelfId} ↔ ${normalizedPeerId}`
+                  : "Select a conversation"}
+              </CardTitle>
+              <CardDescription>
+                Messages are persisted via REST and relayed live over WebRTC (with
+                WebSocket fallback).
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="outline">WebRTC: {rtcStatusLabel}</Badge>
+              <Badge variant="outline">WS: {socketStatusLabel}</Badge>
+              <Badge className={cn("bg-muted text-muted-foreground", dataChannelStatusClass)}>
+                Data channel: {dataChannelLabel}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="relative flex-1 overflow-hidden rounded-2xl border border-border/60 bg-muted/20">
+              <ScrollArea className="absolute inset-0 p-4">
+                <div className="flex flex-col gap-4">
+                  {!conversationReady ? (
+                    <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+                      Add your ID and a peer to begin.
+                    </div>
+                  ) : isLoading ? (
+                    <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading messages…
+                    </div>
+                  ) : sortedMessages.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+                      No messages yet. Say hello!
+                    </div>
+                  ) : (
+                    sortedMessages.map((message) => {
+                      const isMine = message.senderId === normalizedSelfId
+                      const statusInfo = getMessageStatusLabel(message)
+                      return (
+                        <div
+                          key={message.id}
+                          className={cn(
+                            "flex flex-col gap-2",
+                            isMine ? "items-end text-right" : "items-start text-left",
+                          )}
+                        >
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="font-semibold text-foreground">
+                              {isMine ? "You" : message.senderId}
+                            </span>
+                            <time dateTime={message.createdAt}>
+                              {new Date(message.createdAt).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </time>
+                          </div>
+
+                          <div
+                            className={cn(
+                              "w-full max-w-xl rounded-2xl border px-4 py-3 text-sm shadow-sm md:max-w-[70%]",
+                              isMine
+                                ? "bg-primary text-primary-foreground border-transparent"
+                                : "bg-card text-foreground border-border/60",
+                            )}
+                          >
+                            {message.replyTo && (
+                              <div className="mb-3 border-l-2 border-border/60 pl-3 text-xs text-muted-foreground">
+                                <span className="block font-semibold">
+                                  {message.replyTo.senderId === normalizedSelfId
+                                    ? "You"
+                                    : message.replyTo.senderId}
+                                </span>
+                                <span className="line-clamp-2">
+                                  {message.replyTo.content}
+                                </span>
+                              </div>
+                            )}
+                            <p className="leading-relaxed">{message.content}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {statusInfo && (
+                              <span className={cn("text-xs", statusInfo.className)}>
+                                {statusInfo.label}
+                              </span>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => handleStartReply(message)}
+                            >
+                              <MessageSquareReply className="mr-1 h-3.5 w-3.5" />
+                              Reply
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                  {peerTyping && (
+                    <div className="text-sm italic text-muted-foreground">
+                      {normalizedPeerId || "Peer"} is typing…
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3">
+              {replyingTo && (
+                <div className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
+                  <div className="space-y-1">
+                    <span className="font-semibold text-muted-foreground">
+                      Replying to{" "}
+                      {replyingTo.senderId === normalizedSelfId
+                        ? "yourself"
+                        : replyingTo.senderId}
                     </span>
-                    <p className="reply-content">
-                      {formatConversationPreview(message.replyTo.content)}
+                    <p className="line-clamp-2 text-muted-foreground/80">
+                      {formatConversationPreview(replyingTo.content)}
                     </p>
                   </div>
-                )}
-                <p className="message-body">{message.content}</p>
-                {statusInfo && (
-                  <span className={`message-status ${statusInfo.className}`}>
-                    {statusInfo.label}
-                  </span>
-                )}
-                <MessageReactions
-                  message={message}
-                  currentUserId={normalizedSelfId}
-                  onReactionUpdate={(updatedMessage) => {
-                    setMessages(prevMessages => 
-                      prevMessages.map(m => 
-                        m.id === updatedMessage.id ? updatedMessage : m
-                      )
-                    );
-                  }}
-                />
-                <div className="message-actions">
-                  <button
+                  <Button
                     type="button"
-                    className="reply-button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleStartReply(message);
-                    }}
+                    variant="ghost"
+                    size="xs"
+                    onClick={handleCancelReply}
                   >
-                    Reply
-                  </button>
+                    <X className="h-4 w-4" />
+                  </Button>
                 </div>
-              </article>
-            );
-          })}
-          {peerTyping && (
-            <div className="typing-indicator">
-              {(normalizedPeerId || "Peer")} is typing…
-            </div>
-          )}
-        </section>
-        <form className="chat-composer" onSubmit={handleSubmit}>
-          {replyingTo && (
-            <div className="composer-reply-preview">
-              <div className="composer-reply-content">
-                <span className="replying-label">
-                  Replying to {replyingTo.senderId === normalizedSelfId ? "yourself" : replyingTo.senderId}
-                </span>
-                <p>{formatConversationPreview(replyingTo.content)}</p>
+              )}
+
+              <Textarea
+                name="message"
+                placeholder="Type a message…"
+                rows={3}
+                value={messageInput}
+                onChange={handleMessageChange}
+                onBlur={handleInputBlur}
+                disabled={!conversationReady}
+              />
+              <div className="flex justify-end gap-2">
+                <Button type="submit" disabled={!canSendMessage}>
+                  {isSending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="mr-2 h-4 w-4" />
+                      Send
+                    </>
+                  )}
+                </Button>
               </div>
-              <button
-                type="button"
-                className="cancel-reply"
-                onClick={handleCancelReply}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          <textarea
-            name="message"
-            placeholder="Type a message…"
-            rows={3}
-            value={messageInput}
-            onChange={handleMessageChange}
-            onBlur={handleInputBlur}
-            disabled={!conversationReady}
-          />
-          <button type="submit" disabled={!canSendMessage}>
-            {isSending ? "Sending…" : "Send"}
-          </button>
-        </form>
-      </main>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
     </div>
-  );
+  )
+}
+
+interface StatusRowProps {
+  label: string
+  value: string
+  badgeClassName?: string
+}
+
+function StatusRow({ label, value, badgeClassName }: StatusRowProps) {
+  return (
+    <div className="flex items-center justify-between rounded-lg bg-background/60 px-3 py-2">
+      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        {label}
+      </span>
+      <Badge
+        variant="outline"
+        className={cn("border-border/60 text-xs font-semibold", badgeClassName)}
+      >
+        {value}
+      </Badge>
+    </div>
+  )
 }
 
 function dedupeAndSort(messages: ChatMessage[]): ChatMessage[] {
-  const map = new Map<string, ChatMessage>();
+  const map = new Map<string, ChatMessage>()
   for (const message of messages) {
     const key =
       message.id && message.id.length > 0
         ? message.id
-        : `${message.senderId}-${message.recipientId}-${message.createdAt}`;
+        : `${message.senderId}-${message.recipientId}-${message.createdAt}`
     if (map.has(key)) {
-      const existing = map.get(key)!;
+      const existing = map.get(key)!
       map.set(key, {
         ...existing,
         ...message,
@@ -778,15 +859,15 @@ function dedupeAndSort(messages: ChatMessage[]): ChatMessage[] {
         read: existing.read || message.read,
         readAt: message.readAt ?? existing.readAt,
         replyTo: message.replyTo ?? existing.replyTo,
-      });
+      })
     } else {
-      map.set(key, message);
+      map.set(key, message)
     }
   }
 
   return Array.from(map.values()).sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-  );
+  )
 }
 
-export default App;
+export default App
