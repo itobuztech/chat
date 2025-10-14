@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { ObjectId as MongoObjectId } from "mongodb";
 
-import { getSignalsCollection } from "../lib/mongoClient.js";
-import { toApiSignal } from "../utils/formatters.js";
-import { saveSignal } from "../services/signalingService.js";
-import { broadcastSignal } from "../realtime/websocketHub.js";
+import { getSignalsCollection } from "../lib/mongoClient";
+import { broadcastSignal } from "../realtime/websocketHub";
+import { saveSignal } from "../services/signalingService";
+import { toApiSignal } from "../utils/formatters";
 
 const router = Router();
 

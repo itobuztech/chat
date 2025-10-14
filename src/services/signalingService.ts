@@ -1,10 +1,10 @@
-import type { WebRTCSignalType } from "../lib/mongoClient.js";
 import {
+  WebRTCSignalType,
   getSignalsCollection,
-  type WebRTCSignalDocument,
-} from "../lib/mongoClient.js";
-import { toApiSignal } from "../utils/formatters.js";
-import type { ApiSignal } from "../types/api.js";
+  WebRTCSignalDocument,
+} from "../lib/mongoClient";
+import type { ApiSignal } from "../types/api";
+import { toApiSignal } from "../utils/formatters";
 
 const ALLOWED_SIGNAL_TYPES: ReadonlySet<WebRTCSignalType> = new Set([
   "offer",

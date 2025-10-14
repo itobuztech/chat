@@ -3,8 +3,8 @@ import type { ObjectId } from "mongodb";
 import type {
   MessageDocument,
   WebRTCSignalDocument,
-} from "../lib/mongoClient.js";
-import type { ApiMessage, ApiSignal } from "../types/api.js";
+} from "../lib/mongoClient";
+import type { ApiMessage, ApiSignal } from "../types/api";
 
 type MessageWithId = MessageDocument & { _id?: ObjectId };
 type SignalWithId = WebRTCSignalDocument & { _id?: ObjectId };
@@ -17,8 +17,10 @@ export function toApiMessage(doc: MessageWithId): ApiMessage {
     recipientId: doc.recipientId,
     content: doc.content,
     createdAt: doc.createdAt.toISOString(),
-    delivered: doc.delivered,
+    delivered: Boolean(doc.delivered),
     deliveredAt: doc.deliveredAt?.toISOString(),
+    read: Boolean(doc.read),
+    readAt: doc.readAt?.toISOString(),
   };
 }
 

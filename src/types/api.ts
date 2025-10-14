@@ -7,6 +7,8 @@ export interface ApiMessage {
   createdAt: string;
   delivered: boolean;
   deliveredAt?: string;
+  read: boolean;
+  readAt?: string;
 }
 
 export interface ApiSignal {

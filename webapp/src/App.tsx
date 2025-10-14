@@ -7,6 +7,7 @@ import {
   sendMessage,
 } from "./lib/messagesApi.js";
 import useWebRtcMessaging, {
+  type MessageStatusUpdate,
   type WebRtcMessage,
 } from "./hooks/useWebRtcMessaging.js";
 
@@ -40,6 +41,7 @@ function App(): JSX.Element {
   const typingTimeoutRef = useRef<number | null>(null);
   const typingActiveRef = useRef(false);
   const peerTypingTimeoutRef = useRef<number | null>(null);
+  const readAckedRef = useRef<Set<string>>(new Set());
   const previousSocketStatusRef = useRef<string>("disconnected");
 
   const normalizedSelfId = selfId.trim();
@@ -137,13 +139,44 @@ function App(): JSX.Element {
         recipientId: incoming.recipientId,
         content: incoming.content,
         createdAt: incoming.createdAt,
-        delivered: true,
-        deliveredAt: incoming.createdAt,
+        delivered: incoming.delivered ?? false,
+        deliveredAt: incoming.deliveredAt,
+        read: incoming.read ?? false,
+        readAt: incoming.readAt,
       };
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
       handlePeerTyping(false);
     },
     [handlePeerTyping],
+  );
+
+  const handleStatusUpdate = useCallback(
+    (update: MessageStatusUpdate) => {
+      if (update.status === "sent") {
+        return;
+      }
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== update.messageId) {
+            return message;
+          }
+          const next = { ...message };
+          if (update.status === "delivered") {
+            next.delivered = true;
+            next.deliveredAt = new Date(update.timestamp).toISOString();
+          }
+          if (update.status === "read") {
+            next.read = true;
+            next.readAt = new Date(update.timestamp).toISOString();
+            next.delivered = true;
+            next.deliveredAt = next.deliveredAt ?? next.readAt;
+            readAckedRef.current.add(update.messageId);
+          }
+          return next;
+        }),
+      );
+    },
+    [],
   );
 
   const {
@@ -153,12 +186,14 @@ function App(): JSX.Element {
     dataChannelReady,
     sendMessage: sendViaRtc,
     sendTyping,
+    sendStatus,
   } = useWebRtcMessaging({
     selfId: normalizedSelfId,
     peerId: normalizedPeerId,
     enabled: conversationReady,
     onMessage: appendIncomingMessage,
     onTyping: handlePeerTyping,
+    onStatus: handleStatusUpdate,
   });
 
   const isMessageEmpty = messageInput.trim().length === 0;
@@ -187,6 +222,25 @@ function App(): JSX.Element {
 
   const dataChannelLabel = dataChannelReady ? "Open" : "Closed";
   const dataChannelStatusClass = dataChannelReady ? "status-open" : "status-closed";
+
+  const getMessageStatusLabel = useCallback(
+    (message: ChatMessage): { label: string; className: string } | null => {
+      if (message.senderId !== normalizedSelfId) {
+        return null;
+      }
+
+      if (message.read) {
+        return { label: "Read", className: "read" };
+      }
+
+      if (message.delivered) {
+        return { label: "Delivered", className: "delivered" };
+      }
+
+      return { label: "Sent", className: "sent" };
+    },
+    [normalizedSelfId],
+  );
 
   const handleMessageChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -272,6 +326,10 @@ function App(): JSX.Element {
         recipientId: persisted.recipientId,
         content: persisted.content,
         createdAt: persisted.createdAt,
+        delivered: persisted.delivered,
+        deliveredAt: persisted.deliveredAt,
+        read: persisted.read,
+        readAt: persisted.readAt,
       };
       let deliveredViaRtc = false;
       try {
@@ -364,6 +422,33 @@ function App(): JSX.Element {
     socketStatus,
   ]);
 
+  useEffect(() => {
+    if (!conversationReady) {
+      readAckedRef.current.clear();
+      return;
+    }
+
+    sortedMessages.forEach((message) => {
+      if (
+        message.recipientId === normalizedSelfId &&
+        !message.read &&
+        !readAckedRef.current.has(message.id)
+      ) {
+        readAckedRef.current.add(message.id);
+        void sendStatus(message.id, "read");
+      }
+    });
+  }, [
+    conversationReady,
+    normalizedSelfId,
+    sendStatus,
+    sortedMessages,
+  ]);
+
+  useEffect(() => {
+    readAckedRef.current.clear();
+  }, [normalizedPeerId, normalizedSelfId]);
+
   return (
     <div className="chat-shell">
       <aside className="chat-sidebar">
@@ -450,6 +535,7 @@ function App(): JSX.Element {
           )}
           {sortedMessages.map((message) => {
             const isMine = message.senderId === normalizedSelfId;
+            const statusInfo = getMessageStatusLabel(message);
             return (
               <article
                 key={message.id}
@@ -464,6 +550,11 @@ function App(): JSX.Element {
                   </time>
                 </div>
                 <p className="message-body">{message.content}</p>
+                {statusInfo && (
+                  <span className={`message-status ${statusInfo.className}`}>
+                    {statusInfo.label}
+                  </span>
+                )}
               </article>
             );
           })}
@@ -499,7 +590,19 @@ function dedupeAndSort(messages: ChatMessage[]): ChatMessage[] {
       message.id && message.id.length > 0
         ? message.id
         : `${message.senderId}-${message.recipientId}-${message.createdAt}`;
-    map.set(key, message);
+    if (map.has(key)) {
+      const existing = map.get(key)!;
+      map.set(key, {
+        ...existing,
+        ...message,
+        delivered: existing.delivered || message.delivered,
+        deliveredAt: message.deliveredAt ?? existing.deliveredAt,
+        read: existing.read || message.read,
+        readAt: message.readAt ?? existing.readAt,
+      });
+    } else {
+      map.set(key, message);
+    }
   }
 
   return Array.from(map.values()).sort(

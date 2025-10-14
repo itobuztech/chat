@@ -20,6 +20,8 @@ type ConnectionStatus =
 
 type SocketStatus = "connecting" | "connected" | "disconnected";
 type TypingState = "start" | "stop";
+type MessageStatus = "sent" | "delivered" | "read";
+type UpdatableStatus = Exclude<MessageStatus, "sent">;
 
 type TypingPayload = {
   senderId: string;
@@ -31,7 +33,17 @@ type TypingPayload = {
 
 type ChannelEnvelope =
   | { kind: "message"; payload: WebRtcMessage }
-  | { kind: "typing"; payload: TypingPayload };
+  | { kind: "typing"; payload: TypingPayload }
+  | { kind: "status"; payload: MessageStatusUpdate };
+
+export interface MessageStatusUpdate {
+  messageId: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  status: MessageStatus;
+  timestamp: number;
+}
 
 export interface WebRtcMessage {
   id: string;
@@ -40,6 +52,10 @@ export interface WebRtcMessage {
   recipientId: string;
   content: string;
   createdAt: string;
+  delivered: boolean;
+  deliveredAt?: string;
+  read: boolean;
+  readAt?: string;
 }
 
 interface UseWebRtcMessagingOptions {
@@ -48,6 +64,7 @@ interface UseWebRtcMessagingOptions {
   enabled: boolean;
   onMessage: (message: WebRtcMessage) => void;
   onTyping?: (typing: boolean) => void;
+  onStatus?: (update: MessageStatusUpdate) => void;
 }
 
 interface UseWebRtcMessagingResult {
@@ -57,6 +74,7 @@ interface UseWebRtcMessagingResult {
   dataChannelReady: boolean;
   sendMessage: (message: WebRtcMessage) => Promise<void>;
   sendTyping: (typing: boolean) => Promise<void>;
+  sendStatus: (messageId: string, status: UpdatableStatus) => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
@@ -94,6 +112,7 @@ export function useWebRtcMessaging({
   enabled,
   onMessage,
   onTyping,
+  onStatus,
 }: UseWebRtcMessagingOptions): UseWebRtcMessagingResult {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("disconnected");
@@ -110,6 +129,44 @@ export function useWebRtcMessaging({
   const isInitiator = useMemo(
     () => normalizedSelfId < normalizedPeerId,
     [normalizedPeerId, normalizedSelfId],
+  );
+
+  const sendStatus = useCallback(
+    async (messageId: string, status: UpdatableStatus) => {
+      if (!messageId || !normalizedSelfId || !normalizedPeerId) {
+        return;
+      }
+
+      const timestamp = Date.now();
+      const payload: MessageStatusUpdate = {
+        messageId,
+        conversationId,
+        senderId: normalizedSelfId,
+        recipientId: normalizedPeerId,
+        status,
+        timestamp,
+      };
+
+      const channel = dataChannelRef.current;
+      if (channel && channel.readyState === "open") {
+        channel.send(JSON.stringify({ kind: "status", payload }));
+      }
+
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "messageStatus",
+            messageId,
+            status,
+            timestamp,
+          }),
+        );
+      }
+
+      onStatus?.(payload);
+    },
+    [conversationId, normalizedPeerId, normalizedSelfId, onStatus],
   );
 
   const wsUrl = useMemo(() => deriveWebSocketUrl(API_BASE_URL), []);
@@ -250,22 +307,30 @@ export function useWebRtcMessaging({
           }
           if (envelope.kind === "message" && envelope.payload) {
             onMessage(envelope.payload);
+            if (envelope.payload.recipientId === normalizedSelfId) {
+              void sendStatus(envelope.payload.id, "delivered");
+            }
           } else if (envelope.kind === "typing" && envelope.payload) {
             handleTypingPayload(envelope.payload);
+          } else if (envelope.kind === "status" && envelope.payload) {
+            const statusPayload = envelope.payload;
+            if (statusPayload.senderId !== normalizedSelfId) {
+              onStatus?.(statusPayload);
+            }
           }
         } catch (parseError) {
           console.warn("Failed to parse incoming WebRTC message", parseError);
         }
       };
     },
-    [handleTypingPayload, onMessage, resetConnectionRefs, setDataChannelReady],
+    [handleTypingPayload, onMessage, onStatus, normalizedSelfId, resetConnectionRefs, sendStatus, setDataChannelReady],
   );
 
   const sendSignalEnvelope = useCallback(
     async (
       sessionId: string,
       type: SignalType,
-      payload: Record<string, unknown> | null,
+      payload: RTCIceCandidateInit | null,
     ) => {
       const socket = wsRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -436,6 +501,8 @@ export function useWebRtcMessaging({
     }
   }, []);
 
+  
+
   const handleIncomingSignal = useCallback(
     async (signal: WebRtcSignal) => {
       if (signal.senderId === normalizedSelfId) {
@@ -577,6 +644,10 @@ export function useWebRtcMessaging({
                   recipientId: string;
                   content: string;
                   createdAt: string;
+                  delivered: boolean;
+                  deliveredAt?: string | null;
+                  read: boolean;
+                  readAt?: string | null;
                 };
                 if (payload && typeof payload.id === "string") {
                   onMessage({
@@ -586,8 +657,27 @@ export function useWebRtcMessaging({
                     recipientId: payload.recipientId,
                     content: payload.content,
                     createdAt: payload.createdAt,
+                    delivered: Boolean(payload.delivered),
+                    deliveredAt: payload.deliveredAt ?? undefined,
+                    read: Boolean(payload.read),
+                    readAt: payload.readAt ?? undefined,
                   });
+                  if (payload.recipientId === normalizedSelfId) {
+                    void sendStatus(payload.id, "delivered");
+                  }
                 }
+              }
+              break;
+            case "message:status-update":
+              if (data.payload) {
+                const payload = data.payload as MessageStatusUpdate;
+                onStatus?.(payload);
+              }
+              break;
+            case "message:status-ack":
+              if (data.payload) {
+                const payload = data.payload as MessageStatusUpdate;
+                onStatus?.(payload);
               }
               break;
             case "error":
@@ -654,9 +744,12 @@ export function useWebRtcMessaging({
     drainPendingSignals,
     enabled,
     handleIncomingSignal,
-    normalizedSelfId,
     handleTypingPayload,
+    normalizedPeerId,
+    normalizedSelfId,
     onMessage,
+    onStatus,
+    sendStatus,
     wsUrl,
   ]);
 
@@ -801,6 +894,7 @@ export function useWebRtcMessaging({
     dataChannelReady,
     sendMessage,
     sendTyping,
+    sendStatus,
     disconnect,
   };
 }

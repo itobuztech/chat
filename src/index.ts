@@ -1,17 +1,18 @@
 import "dotenv/config";
 
+import { createServer } from "http";
+
+import cors from "cors";
 import express, {
   type ErrorRequestHandler,
   type Request,
   type Response,
 } from "express";
-import cors from "cors";
-import { createServer } from "http";
 
-import messagesRouter from "./routes/messages.js";
-import webrtcRouter from "./routes/webrtc.js";
-import { closeDatabase, connectToDatabase } from "./lib/mongoClient.js";
-import { initializeWebSocketServer } from "./realtime/websocketHub.js";
+import { closeDatabase, connectToDatabase } from "./lib/mongoClient";
+import { initializeWebSocketServer } from "./realtime/websocketHub";
+import messagesRouter from "./routes/messages";
+import webrtcRouter from "./routes/webrtc";
 
 const app = express();
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -37,7 +38,7 @@ app.get("/", (_req: Request, res: Response) => {
 app.use("/api/messages", messagesRouter);
 app.use("/api/webrtc", webrtcRouter);
 
-const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+const errorHandler: ErrorRequestHandler = (err, _req, res) => {
   console.error(err);
   const statusCode =
     typeof err?.status === "number" ? err.status : Number(err?.statusCode);

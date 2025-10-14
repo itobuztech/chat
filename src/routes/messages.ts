@@ -5,9 +5,12 @@ import { ObjectId as MongoObjectId } from "mongodb";
 import {
   getMessagesCollection,
   type MessageDocument,
-} from "../lib/mongoClient.js";
-import { toApiMessage } from "../utils/formatters.js";
-import { broadcastNewMessage } from "../realtime/websocketHub.js";
+} from "../lib/mongoClient";
+import {
+  broadcastMessageStatus,
+  broadcastNewMessage,
+} from "../realtime/websocketHub";
+import { toApiMessage } from "../utils/formatters";
 
 interface SendMessageRequestBody {
   senderId?: string;
@@ -53,6 +56,7 @@ router.post("/", async (req, res, next) => {
       content: normalizedContent,
       createdAt: timestamp,
       delivered: false,
+      read: false,
     };
 
     const result = await messages.insertOne(message);
@@ -156,12 +160,27 @@ router.get("/pending/:recipientId", async (req, res, next) => {
 
     const ids = pendingMessages.map((doc) => doc._id).filter(Boolean) as ObjectId[];
 
+    const deliveredAt = new Date();
+
     await messages.updateMany(
       { _id: { $in: ids } },
-      { $set: { delivered: true, deliveredAt: new Date() } },
+      { $set: { delivered: true, deliveredAt } },
     );
 
-    const deliveredAt = new Date();
+    for (const doc of pendingMessages) {
+      if (!doc._id) {
+        continue;
+      }
+      const messageId = doc._id.toString();
+      broadcastMessageStatus({
+        messageId,
+        conversationId: doc.conversationId,
+        senderId: doc.senderId,
+        recipientId: doc.recipientId,
+        status: "delivered",
+        timestamp: deliveredAt.getTime(),
+      });
+    }
 
     return res.json({
       messages: pendingMessages.map((doc) => {

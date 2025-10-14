@@ -85,6 +85,7 @@ The Express server exposes lightweight REST APIs that act as the WebRTC signalin
   Retrieve undelivered messages for a peer; results are marked as delivered automatically. Optionally pass `after` to only receive items newer than a specific message.
 
 Messages are persisted in MongoDB so offline peers can retrieve them when they come back. A WebSocket push delivers new messages instantly when recipients are connected.
+Each message keeps track of `sent`, `delivered`, and `read` timestamps—updates flow over WebRTC when possible, falling back to the WebSocket channel and stored in MongoDB.
 
 Environment variables:
 - `MONGO_URI` (default `mongodb://localhost:27017`) – connection string.

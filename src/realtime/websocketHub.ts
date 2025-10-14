@@ -3,14 +3,17 @@ import { WebSocketServer, WebSocket } from "ws";
 
 import type { ObjectId } from "mongodb";
 
-import type { MessageDocument } from "../lib/mongoClient.js";
-import type { ApiMessage, ApiSignal } from "../types/api.js";
-import { toApiMessage } from "../utils/formatters.js";
-import { saveSignal } from "../services/signalingService.js";
+import type { MessageDocument } from "../lib/mongoClient";
+import type { ApiMessage, ApiSignal } from "../types/api";
+import { toApiMessage } from "../utils/formatters";
+import { saveSignal } from "../services/signalingService";
+import { updateMessageStatus } from "../services/messageService";
 
 type ClientRegistry = Map<string, Set<WebSocket>>;
 
 type TypingState = "start" | "stop";
+
+type MessageStatus = "sent" | "delivered" | "read";
 
 interface SignalOutbound {
   type: "signal";
@@ -35,6 +38,20 @@ interface TypingOutbound {
   payload: TypingPayload;
 }
 
+interface MessageStatusPayload {
+  messageId: string;
+  conversationId: string;
+  senderId: string;
+  recipientId: string;
+  status: MessageStatus;
+  timestamp: number;
+}
+
+interface MessageStatusOutbound {
+  type: "message:status-update";
+  payload: MessageStatusPayload;
+}
+
 interface ErrorOutbound {
   type: "error";
   error: string;
@@ -44,6 +61,7 @@ type OutboundEvent =
   | SignalOutbound
   | MessageOutbound
   | TypingOutbound
+  | MessageStatusOutbound
   | ErrorOutbound
   | Record<string, unknown>;
 
@@ -79,6 +97,46 @@ export function initializeWebSocketServer(server: HttpServer): void {
               return;
             }
             await handleSignalEvent(socket, data);
+            break;
+          }
+          case "messageStatus": {
+            if (!peerId) {
+              send(socket, { type: "error", error: "Handshake not completed." });
+              return;
+            }
+            const messageId =
+              typeof data.messageId === "string" ? data.messageId.trim() : "";
+            const status =
+              data.status === "delivered"
+                ? "delivered"
+                : data.status === "read"
+                  ? "read"
+                  : null;
+            if (!messageId || !status) {
+              send(socket, { type: "error", error: "Invalid message status payload." });
+              break;
+            }
+
+            const result = await updateMessageStatus(messageId, status);
+            if (!result) {
+              send(socket, {
+                type: "error",
+                error: "Unable to update message status.",
+              });
+              break;
+            }
+
+            const payload: MessageStatusPayload = {
+              messageId,
+              conversationId: result.after.conversationId,
+              senderId: result.after.senderId,
+              recipientId: result.after.recipientId,
+              status,
+              timestamp: result.timestamp.getTime(),
+            };
+
+            broadcastMessageStatus(payload);
+            send(socket, { type: "message:status-ack", payload });
             break;
           }
           case "typing": {
@@ -138,13 +196,25 @@ export function initializeWebSocketServer(server: HttpServer): void {
 export function broadcastNewMessage(doc: MessageDocument & { _id?: ObjectId }): void {
   const apiMessage = toApiMessage(doc);
   emitToPeer(apiMessage.recipientId, { type: "message:new", payload: apiMessage });
-  emitToPeer(apiMessage.senderId, { type: "message:status", payload: apiMessage });
+  broadcastMessageStatus({
+    messageId: apiMessage.id,
+    conversationId: apiMessage.conversationId,
+    senderId: apiMessage.senderId,
+    recipientId: apiMessage.recipientId,
+    status: "sent",
+    timestamp: doc.createdAt.getTime(),
+  });
 }
 
 export function broadcastSignal(signal: ApiSignal, excludePeerId?: string): void {
   if (excludePeerId !== signal.recipientId) {
     emitToPeer(signal.recipientId, { type: "signal", payload: signal });
   }
+}
+
+export function broadcastMessageStatus(payload: MessageStatusPayload): void {
+  emitToPeer(payload.senderId, { type: "message:status-update", payload });
+  emitToPeer(payload.recipientId, { type: "message:status-update", payload });
 }
 
 export function broadcastTyping(payload: TypingPayload): void {
