@@ -1,13 +1,14 @@
 import type { Server as HttpServer } from "http";
-import { WebSocketServer, WebSocket } from "ws";
 
 import type { ObjectId } from "mongodb";
+import { WebSocketServer, WebSocket } from "ws";
+
 
 import type { MessageDocument } from "../lib/mongoClient";
+import { updateMessageStatus } from "../services/messageService";
+import { saveSignal } from "../services/signalingService";
 import type { ApiMessage, ApiSignal } from "../types/api";
 import { toApiMessage } from "../utils/formatters";
-import { saveSignal } from "../services/signalingService";
-import { updateMessageStatus } from "../services/messageService";
 
 type ClientRegistry = Map<string, Set<WebSocket>>;
 
@@ -87,8 +88,9 @@ export function initializeWebSocketServer(server: HttpServer): void {
               return;
             }
             peerId = incomingPeer;
-            registerClient(peerId, socket);
-            send(socket, { type: "hello:ack", peerId });
+            registerClient(peerId!, socket);
+
+            send(socket, { type: "hello:ack", peerId: incomingPeer });
             break;
           }
           case "signal": {

@@ -10,6 +10,12 @@ export interface ChatMessage {
   read: boolean;
   readAt?: string;
   replyTo?: MessageReply;
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
 }
 
 export interface SendMessagePayload {
@@ -94,4 +100,44 @@ export async function fetchConversations(
     response,
   );
   return data.conversations;
+}
+
+export async function addReaction(
+  messageId: string,
+  emoji: string,
+  userId: string,
+): Promise<ChatMessage> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/messages/${messageId}/reactions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ emoji, userId }),
+    },
+  );
+
+  const data = await handleResponse<{ message: ChatMessage }>(response);
+  return data.message;
+}
+
+export async function removeReaction(
+  messageId: string,
+  emoji: string,
+  userId: string,
+): Promise<ChatMessage> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/messages/${messageId}/reactions`,
+    {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ emoji, userId }),
+    },
+  );
+
+  const data = await handleResponse<{ message: ChatMessage }>(response);
+  return data.message;
 }

@@ -15,6 +15,12 @@ export interface ApiMessage {
     content: string;
     createdAt: string;
   };
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
 }
 
 export interface ApiSignal {

@@ -333,6 +333,138 @@ router.patch("/:messageId/status", async (req, res, next) => {
   }
 });
 
+// Add reaction to a message
+router.post("/:messageId/reactions", async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const { emoji, userId } = req.body;
+
+    if (!ObjectId.isValid(messageId)) {
+      return res.status(400).json({ error: "Invalid messageId." });
+    }
+
+    if (!emoji || typeof emoji !== "string" || !userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "emoji and userId are required." });
+    }
+
+    const trimmedEmoji = emoji.trim();
+    const trimmedUserId = userId.trim();
+
+    if (!trimmedEmoji || !trimmedUserId) {
+      return res.status(400).json({ error: "emoji and userId cannot be empty." });
+    }
+
+    const messages = await getMessagesCollection();
+    const message = await messages.findOne({ _id: new ObjectId(messageId) });
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    // Initialize reactions object if it doesn't exist
+    const reactions = message.reactions || {};
+    
+    // Initialize emoji reactions if it doesn't exist
+    if (!reactions[trimmedEmoji]) {
+      reactions[trimmedEmoji] = { userIds: [], count: 0 };
+    }
+
+    // Check if user already reacted with this emoji
+    if (reactions[trimmedEmoji].userIds.includes(trimmedUserId)) {
+      return res.status(400).json({ error: "User has already reacted with this emoji." });
+    }
+
+    // Add user reaction
+    reactions[trimmedEmoji].userIds.push(trimmedUserId);
+    reactions[trimmedEmoji].count = reactions[trimmedEmoji].userIds.length;
+
+    const result = await messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId) },
+      { $set: { reactions } },
+      { returnDocument: "after" }
+    );
+
+    if (!result) {
+      return res.status(500).json({ error: "Failed to update message." });
+    }
+
+    const apiMessage = toApiMessage(result);
+    
+    // Broadcast reaction update
+    broadcastNewMessage(result);
+
+    return res.json({ message: apiMessage });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Remove reaction from a message
+router.delete("/:messageId/reactions", async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const { emoji, userId } = req.body;
+
+    if (!ObjectId.isValid(messageId)) {
+      return res.status(400).json({ error: "Invalid messageId." });
+    }
+
+    if (!emoji || typeof emoji !== "string" || !userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "emoji and userId are required." });
+    }
+
+    const trimmedEmoji = emoji.trim();
+    const trimmedUserId = userId.trim();
+
+    if (!trimmedEmoji || !trimmedUserId) {
+      return res.status(400).json({ error: "emoji and userId cannot be empty." });
+    }
+
+    const messages = await getMessagesCollection();
+    const message = await messages.findOne({ _id: new ObjectId(messageId) });
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    const reactions = message.reactions || {};
+
+    if (!reactions[trimmedEmoji] || !reactions[trimmedEmoji].userIds.includes(trimmedUserId)) {
+      return res.status(400).json({ error: "User has not reacted with this emoji." });
+    }
+
+    // Remove user from reaction
+    reactions[trimmedEmoji].userIds = reactions[trimmedEmoji].userIds.filter(
+      id => id !== trimmedUserId
+    );
+    reactions[trimmedEmoji].count = reactions[trimmedEmoji].userIds.length;
+
+    // Remove emoji completely if no users left
+    if (reactions[trimmedEmoji].count === 0) {
+      delete reactions[trimmedEmoji];
+    }
+
+    const result = await messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId) },
+      { $set: { reactions } },
+      { returnDocument: "after" }
+    );
+
+    if (!result) {
+      return res.status(500).json({ error: "Failed to update message." });
+    }
+
+    const apiMessage = toApiMessage(result);
+    
+    // Broadcast reaction update
+    broadcastNewMessage(result);
+
+    return res.json({ message: apiMessage });
+  } catch (error) {
+    next(error);
+  }
+});
+
 function createConversationId(peerA: string, peerB: string): string {
   return [peerA.trim(), peerB.trim()].sort((a, b) => a.localeCompare(b)).join("#");
 }

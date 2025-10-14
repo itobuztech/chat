@@ -57,6 +57,12 @@ export interface WebRtcMessage {
   read: boolean;
   readAt?: string;
   replyTo?: MessageReplySnapshot;
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
 }
 
 interface MessageReplySnapshot {

@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MessageReactions } from "./components/MessageReactions";
 import "./App.css";
 import {
   API_BASE_URL,
@@ -692,6 +693,17 @@ function App(): JSX.Element {
                     {statusInfo.label}
                   </span>
                 )}
+                <MessageReactions
+                  message={message}
+                  currentUserId={normalizedSelfId}
+                  onReactionUpdate={(updatedMessage) => {
+                    setMessages(prevMessages => 
+                      prevMessages.map(m => 
+                        m.id === updatedMessage.id ? updatedMessage : m
+                      )
+                    );
+                  }}
+                />
                 <div className="message-actions">
                   <button
                     type="button"

@@ -29,6 +29,7 @@ export function toApiMessage(doc: MessageWithId): ApiMessage {
           createdAt: doc.replyTo.createdAt.toISOString(),
         }
       : undefined,
+    reactions: doc.reactions,
   };
 }
 

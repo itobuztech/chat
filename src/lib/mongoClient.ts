@@ -26,6 +26,12 @@ export interface MessageDocument {
     content: string;
     createdAt: Date;
   };
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
 }
 
 export type WebRTCSignalType = "offer" | "answer" | "candidate" | "bye";
