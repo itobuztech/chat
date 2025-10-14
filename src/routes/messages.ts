@@ -1,6 +1,5 @@
 import { Router } from "express";
-import type { ObjectId } from "mongodb";
-import { ObjectId as MongoObjectId } from "mongodb";
+import { ObjectId } from "mongodb";
 
 import {
   getMessagesCollection,
@@ -17,6 +16,7 @@ interface SendMessageRequestBody {
   senderId?: string;
   recipientId?: string;
   content?: string;
+  replyToId?: string;
 }
 
 const router = Router();
@@ -59,6 +59,35 @@ router.post("/", async (req, res, next) => {
       delivered: false,
       read: false,
     };
+
+    const replyToId =
+      typeof req.body.replyToId === "string" ? req.body.replyToId.trim() : "";
+    if (replyToId) {
+      if (!ObjectId.isValid(replyToId)) {
+        return res.status(400).json({ error: "Invalid replyToId value." });
+      }
+
+      const replyMessage = await messages.findOne({
+        _id: new ObjectId(replyToId),
+      });
+
+      if (!replyMessage) {
+        return res.status(404).json({ error: "Reply target not found." });
+      }
+
+      if (replyMessage.conversationId !== conversationId) {
+        return res
+          .status(400)
+          .json({ error: "Reply must reference a message in the same conversation." });
+      }
+
+      message.replyTo = {
+        messageId: replyMessage._id!,
+        senderId: replyMessage.senderId,
+        content: replyMessage.content,
+        createdAt: replyMessage.createdAt,
+      };
+    }
 
     const result = await messages.insertOne(message);
     const storedMessage: MessageDocument & { _id?: ObjectId } = {

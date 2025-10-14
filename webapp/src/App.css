@@ -191,6 +191,8 @@
   gap: 0.4rem;
   transition: border-color 0.2s ease, background 0.2s ease;
   color: inherit;
+  cursor: pointer;
+  outline: none;
 }
 
 .conversation-item:hover {
@@ -201,6 +203,11 @@
 .conversation-item.active {
   border-color: rgba(56, 189, 248, 0.8);
   background: rgba(15, 118, 110, 0.25);
+}
+
+.conversation-item:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.9);
+  outline-offset: 2px;
 }
 
 .conversation-item-header {
@@ -394,6 +401,95 @@
 
 .message-status.sent {
   color: rgba(148, 163, 184, 0.85);
+}
+
+.message-reply-preview {
+  border-left: 3px solid rgba(148, 163, 184, 0.5);
+  padding-left: 0.6rem;
+  margin-bottom: 0.45rem;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.reply-author {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+}
+
+.reply-content {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.35rem;
+}
+
+.reply-button {
+  background: transparent;
+  border: none;
+  color: rgba(148, 163, 184, 0.85);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: color 0.2s ease;
+}
+
+.reply-button:hover {
+  color: #38bdf8;
+}
+
+.composer-reply-preview {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.85rem;
+}
+
+.composer-reply-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.replying-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+  letter-spacing: 0.05em;
+}
+
+.composer-reply-content p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.cancel-reply {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  color: #fecaca;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cancel-reply:hover {
+  border-color: rgba(239, 68, 68, 0.9);
+  color: #fee2e2;
 }
 
 @media (max-width: 960px) {

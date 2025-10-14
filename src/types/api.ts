@@ -9,6 +9,12 @@ export interface ApiMessage {
   deliveredAt?: string;
   read: boolean;
   readAt?: string;
+  replyTo?: {
+    id: string;
+    senderId: string;
+    content: string;
+    createdAt: string;
+  };
 }
 
 export interface ApiSignal {

@@ -20,6 +20,12 @@ export interface MessageDocument {
   deliveredAt?: Date;
   read: boolean;
   readAt?: Date;
+  replyTo?: {
+    messageId: ObjectId;
+    senderId: string;
+    content: string;
+    createdAt: Date;
+  };
 }
 
 export type WebRTCSignalType = "offer" | "answer" | "candidate" | "bye";

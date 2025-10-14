@@ -56,6 +56,14 @@ export interface WebRtcMessage {
   deliveredAt?: string;
   read: boolean;
   readAt?: string;
+  replyTo?: MessageReplySnapshot;
+}
+
+interface MessageReplySnapshot {
+  id: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
 }
 
 interface UseWebRtcMessagingOptions {

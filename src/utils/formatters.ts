@@ -21,6 +21,14 @@ export function toApiMessage(doc: MessageWithId): ApiMessage {
     deliveredAt: doc.deliveredAt?.toISOString(),
     read: Boolean(doc.read),
     readAt: doc.readAt?.toISOString(),
+    replyTo: doc.replyTo
+      ? {
+          id: doc.replyTo.messageId.toString(),
+          senderId: doc.replyTo.senderId,
+          content: doc.replyTo.content,
+          createdAt: doc.replyTo.createdAt.toISOString(),
+        }
+      : undefined,
   };
 }
 

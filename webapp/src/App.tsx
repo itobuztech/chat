@@ -43,6 +43,7 @@ function App(): JSX.Element {
   const [isConversationsLoading, setIsConversationsLoading] = useState(false);
   const [conversationsError, setConversationsError] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
   const typingActiveRef = useRef(false);
   const peerTypingTimeoutRef = useRef<number | null>(null);
@@ -106,6 +107,7 @@ function App(): JSX.Element {
       setMessages([]);
       setStatusMessage(null);
       setIsLoading(false);
+      setReplyingTo(null);
       return;
     }
 
@@ -176,6 +178,7 @@ function App(): JSX.Element {
         deliveredAt: incoming.deliveredAt,
         read: incoming.read ?? false,
         readAt: incoming.readAt,
+        replyTo: incoming.replyTo,
       };
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
       handlePeerTyping(false);
@@ -293,11 +296,21 @@ function App(): JSX.Element {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }, []);
 
+  const handleStartReply = useCallback((message: ChatMessage) => {
+    setReplyingTo(message);
+  }, []);
+
+  const handleCancelReply = useCallback(() => {
+    setReplyingTo(null);
+  }, []);
+
   const handleSelectConversation = useCallback(
     (summary: ConversationSummary) => {
       setPeerId(summary.peerId);
       setStatusMessage(null);
       setError(null);
+      setReplyingTo(null);
+      setMessageInput("");
     },
     [],
   );
@@ -376,8 +389,10 @@ function App(): JSX.Element {
         senderId: normalizedSelfId,
         recipientId: normalizedPeerId,
         content,
+        replyToId: replyingTo?.id,
       });
       setMessageInput("");
+      setReplyingTo(null);
       setMessages((prev) => dedupeAndSort([...prev, persisted]));
       const wirePayload: WebRtcMessage = {
         id: persisted.id,
@@ -390,6 +405,7 @@ function App(): JSX.Element {
         deliveredAt: persisted.deliveredAt,
         read: persisted.read,
         readAt: persisted.readAt,
+        replyTo: persisted.replyTo,
       };
       let deliveredViaRtc = false;
       try {
@@ -588,9 +604,12 @@ function App(): JSX.Element {
             <ul className="conversation-items">
               {conversations.map((conversation) => {
                 const active = conversation.peerId === normalizedPeerId;
-                const preview = formatConversationPreview(
+                const replyPreview = conversation.lastMessage.replyTo
+                  ? `↪ ${formatConversationPreview(conversation.lastMessage.replyTo.content)} `
+                  : "";
+                const preview = `${replyPreview}${formatConversationPreview(
                   conversation.lastMessage.content,
-                );
+                )}`;
                 const displayTime = formatConversationTime(
                   conversation.lastMessage.createdAt,
                 );
@@ -655,12 +674,36 @@ function App(): JSX.Element {
                     {new Date(message.createdAt).toLocaleTimeString()}
                   </time>
                 </div>
+                {message.replyTo && (
+                  <div className="message-reply-preview">
+                    <span className="reply-author">
+                      {message.replyTo.senderId === normalizedSelfId
+                        ? "You"
+                        : message.replyTo.senderId}
+                    </span>
+                    <p className="reply-content">
+                      {formatConversationPreview(message.replyTo.content)}
+                    </p>
+                  </div>
+                )}
                 <p className="message-body">{message.content}</p>
                 {statusInfo && (
                   <span className={`message-status ${statusInfo.className}`}>
                     {statusInfo.label}
                   </span>
                 )}
+                <div className="message-actions">
+                  <button
+                    type="button"
+                    className="reply-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleStartReply(message);
+                    }}
+                  >
+                    Reply
+                  </button>
+                </div>
               </article>
             );
           })}
@@ -671,6 +714,23 @@ function App(): JSX.Element {
           )}
         </section>
         <form className="chat-composer" onSubmit={handleSubmit}>
+          {replyingTo && (
+            <div className="composer-reply-preview">
+              <div className="composer-reply-content">
+                <span className="replying-label">
+                  Replying to {replyingTo.senderId === normalizedSelfId ? "yourself" : replyingTo.senderId}
+                </span>
+                <p>{formatConversationPreview(replyingTo.content)}</p>
+              </div>
+              <button
+                type="button"
+                className="cancel-reply"
+                onClick={handleCancelReply}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           <textarea
             name="message"
             placeholder="Type a message…"
@@ -705,6 +765,7 @@ function dedupeAndSort(messages: ChatMessage[]): ChatMessage[] {
         deliveredAt: message.deliveredAt ?? existing.deliveredAt,
         read: existing.read || message.read,
         readAt: message.readAt ?? existing.readAt,
+        replyTo: message.replyTo ?? existing.replyTo,
       });
     } else {
       map.set(key, message);

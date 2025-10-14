@@ -9,12 +9,14 @@ export interface ChatMessage {
   deliveredAt?: string;
   read: boolean;
   readAt?: string;
+  replyTo?: MessageReply;
 }
 
 export interface SendMessagePayload {
   senderId: string;
   recipientId: string;
   content: string;
+  replyToId?: string;
 }
 
 export interface ConversationSummary {
@@ -22,6 +24,13 @@ export interface ConversationSummary {
   peerId: string;
   lastMessage: ChatMessage;
   unreadCount: number;
+}
+
+export interface MessageReply {
+  id: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
 }
 
 export const API_BASE_URL =
