@@ -198,6 +198,73 @@ router.get("/pending/:recipientId", async (req, res, next) => {
   }
 });
 
+router.get("/conversations", async (req, res, next) => {
+  try {
+    const userId =
+      typeof req.query.userId === "string" ? req.query.userId.trim() : "";
+
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ error: "userId query parameter is required." });
+    }
+
+    const messages = await getMessagesCollection();
+
+    const results = await messages
+      .aggregate<{
+        _id: string;
+        lastMessage: MessageDocument & { _id: ObjectId };
+        unreadCount: number;
+      }>([
+        {
+          $match: {
+            $or: [{ senderId: userId }, { recipientId: userId }],
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$conversationId",
+            lastMessage: { $first: "$$ROOT" },
+            unreadCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$recipientId", userId] },
+                      { $eq: ["$read", false] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+        { $sort: { "lastMessage.createdAt": -1 } },
+      ])
+      .toArray();
+
+    const conversations = results.map((entry) => {
+      const [peerA, peerB] = entry._id.split("#");
+      const peerId = peerA === userId ? peerB : peerA;
+      const lastMessage = toApiMessage(entry.lastMessage);
+      return {
+        conversationId: entry._id,
+        peerId,
+        lastMessage,
+        unreadCount: entry.unreadCount,
+      };
+    });
+
+    return res.json({ conversations });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.patch("/:messageId/status", async (req, res, next) => {
   try {
     const { messageId } = req.params;

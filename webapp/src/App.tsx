@@ -3,7 +3,9 @@ import "./App.css";
 import {
   API_BASE_URL,
   type ChatMessage,
+  type ConversationSummary,
   fetchConversation,
+  fetchConversations,
   sendMessage,
 } from "./lib/messagesApi.js";
 import useWebRtcMessaging, {
@@ -37,6 +39,9 @@ function App(): JSX.Element {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [isConversationsLoading, setIsConversationsLoading] = useState(false);
+  const [conversationsError, setConversationsError] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
   const typingTimeoutRef = useRef<number | null>(null);
   const typingActiveRef = useRef(false);
@@ -67,6 +72,30 @@ function App(): JSX.Element {
         new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     );
   }, [messages]);
+
+  const loadConversations = useCallback(async () => {
+    if (!normalizedSelfId) {
+      setConversations([]);
+      setConversationsError(null);
+      setIsConversationsLoading(false);
+      return;
+    }
+
+    setConversationsError(null);
+    setIsConversationsLoading(true);
+    try {
+      const list = await fetchConversations(normalizedSelfId);
+      setConversations(list);
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error
+          ? loadError.message
+          : "Failed to load conversations.";
+      setConversationsError(message);
+    } finally {
+      setIsConversationsLoading(false);
+    }
+  }, [normalizedSelfId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -113,6 +142,10 @@ function App(): JSX.Element {
     };
   }, [conversationReady, normalizedPeerId, normalizedSelfId]);
 
+  useEffect(() => {
+    void loadConversations();
+  }, [loadConversations, normalizedSelfId]);
+
   const handlePeerTyping = useCallback(
     (typing: boolean) => {
       setPeerTyping(typing);
@@ -146,8 +179,9 @@ function App(): JSX.Element {
       };
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]));
       handlePeerTyping(false);
+      void loadConversations();
     },
-    [handlePeerTyping],
+    [handlePeerTyping, loadConversations],
   );
 
   const handleStatusUpdate = useCallback(
@@ -175,8 +209,9 @@ function App(): JSX.Element {
           return next;
         }),
       );
+      void loadConversations();
     },
-    [],
+    [loadConversations],
   );
 
   const {
@@ -240,6 +275,31 @@ function App(): JSX.Element {
       return { label: "Sent", className: "sent" };
     },
     [normalizedSelfId],
+  );
+
+  const formatConversationPreview = useCallback((content: string): string => {
+    const normalized = content.trim().replace(/\s+/g, " ");
+    if (!normalized) {
+      return "(no content)";
+    }
+    return normalized.length > 48 ? `${normalized.slice(0, 48)}…` : normalized;
+  }, []);
+
+  const formatConversationTime = useCallback((iso: string): string => {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }, []);
+
+  const handleSelectConversation = useCallback(
+    (summary: ConversationSummary) => {
+      setPeerId(summary.peerId);
+      setStatusMessage(null);
+      setError(null);
+    },
+    [],
   );
 
   const handleMessageChange = useCallback(
@@ -343,6 +403,7 @@ function App(): JSX.Element {
           ? "Message sent via WebRTC."
           : "Message stored for delivery. Peer will receive it when online.",
       );
+      void loadConversations();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to send message.";
@@ -512,6 +573,51 @@ function App(): JSX.Element {
           {isLoading && <p className="status info">Loading conversation…</p>}
           {error && <p className="status error">{error}</p>}
           {rtcError && <p className="status error">WebRTC: {rtcError}</p>}
+        </section>
+        <section className="conversation-list">
+          <div className="conversation-list-header">
+            <h3>Conversations</h3>
+            {isConversationsLoading && <span className="conversation-loading">Loading…</span>}
+          </div>
+          {conversationsError && (
+            <p className="status error">{conversationsError}</p>
+          )}
+          {!isConversationsLoading && conversations.length === 0 ? (
+            <p className="hint">No conversations yet.</p>
+          ) : (
+            <ul className="conversation-items">
+              {conversations.map((conversation) => {
+                const active = conversation.peerId === normalizedPeerId;
+                const preview = formatConversationPreview(
+                  conversation.lastMessage.content,
+                );
+                const displayTime = formatConversationTime(
+                  conversation.lastMessage.createdAt,
+                );
+                const unread = conversation.unreadCount;
+                return (
+                  <li key={conversation.conversationId}>
+                    <button
+                      type="button"
+                      className={`conversation-item ${active ? "active" : ""}`}
+                      onClick={() => handleSelectConversation(conversation)}
+                    >
+                      <div className="conversation-item-header">
+                        <span className="conversation-peer">{conversation.peerId}</span>
+                        <time className="conversation-time">{displayTime}</time>
+                      </div>
+                      <div className="conversation-item-body">
+                        <span className="conversation-preview">{preview}</span>
+                        {unread > 0 && (
+                          <span className="conversation-unread">{unread}</span>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </section>
       </aside>
       <main className="chat-main">

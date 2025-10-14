@@ -17,6 +17,13 @@ export interface SendMessagePayload {
   content: string;
 }
 
+export interface ConversationSummary {
+  conversationId: string;
+  peerId: string;
+  lastMessage: ChatMessage;
+  unreadCount: number;
+}
+
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
 
@@ -65,4 +72,17 @@ export async function fetchConversation(
   );
   const data = await handleResponse<{ messages: ChatMessage[] }>(response);
   return data.messages;
+}
+
+export async function fetchConversations(
+  userId: string,
+): Promise<ConversationSummary[]> {
+  const params = new URLSearchParams({ userId });
+  const response = await fetch(
+    `${API_BASE_URL}/api/messages/conversations?${params.toString()}`,
+  );
+  const data = await handleResponse<{ conversations: ConversationSummary[] }>(
+    response,
+  );
+  return data.conversations;
 }
