@@ -561,6 +561,7 @@ function App(): JSX.Element {
             </div>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col gap-4 overflow-hidden">
+            <ScrollArea className="inset-0">
             <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/30 p-3 text-xs">
               <StatusRow label="WebRTC" value={rtcStatusLabel} />
               <StatusRow label="Data Channel" value={dataChannelLabel} badgeClassName={dataChannelStatusClass} />
@@ -594,7 +595,7 @@ function App(): JSX.Element {
             </div>
 
             <div className="relative flex-1">
-              <ScrollArea className="absolute inset-0">
+              <ScrollArea className="inset-0">
                 <div className="space-y-1">
                   {conversationsError && (
                     <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
@@ -649,6 +650,7 @@ function App(): JSX.Element {
                 </div>
               </ScrollArea>
             </div>
+            </ScrollArea>
           </CardContent>
         </Card>
 
