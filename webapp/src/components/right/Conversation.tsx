@@ -33,6 +33,15 @@ function Conversation() {
     setReplyingTo(message)
   }, [])
 
+  const handleReactionUpdate = useCallback((updatedMessage: ChatMessage) => {
+    setMessages((prev) => {
+      const next = prev.map((message) =>
+        message.id === updatedMessage.id ? updatedMessage : message,
+      )
+      return dedupeAndSort(next)
+    })
+  }, [])
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return
@@ -207,9 +216,11 @@ function Conversation() {
                         Reply
                       </Button>
 
-                      <MessageReactions message={message} currentUserId={selfId} onReactionUpdate={function (updatedMessage: ChatMessage): void {
-                        throw new Error('Function not implemented.');
-                      } }/>
+                      <MessageReactions
+                        message={message}
+                        currentUserId={selfId}
+                        onReactionUpdate={handleReactionUpdate}
+                      />
                     </div>
                   </div>
                 )

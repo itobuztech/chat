@@ -1,10 +1,12 @@
-import { useState } from "react"
+import { useCallback, useState } from "react"
 
 import { addReaction, removeReaction, type ChatMessage } from "../../lib/messagesApi"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { LaughIcon } from 'lucide-react'
+import { useWebRTCContext } from "@/components/context/WebRTCContext"
+import type { WebRtcMessage } from "@/hooks/useWebRtcMessaging"
 
 interface MessageReactionsProps {
   message: ChatMessage;
@@ -17,6 +19,40 @@ const COMMON_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "😡"];
 export function MessageReactions({ message, currentUserId, onReactionUpdate }: MessageReactionsProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const { sendMessage: sendRtcMessage } = useWebRTCContext()
+
+  const broadcastReactionUpdate = useCallback(
+    async (updated: ChatMessage) => {
+      const wirePayload: WebRtcMessage = {
+        id: updated.id,
+        conversationId: updated.conversationId,
+        senderId: updated.senderId,
+        recipientId: updated.recipientId,
+        content: updated.content,
+        createdAt: updated.createdAt,
+        replyTo: updated.replyTo
+          ? {
+              id: updated.replyTo.id,
+              senderId: updated.replyTo.senderId,
+              content: updated.replyTo.content,
+              createdAt: updated.replyTo.createdAt,
+            }
+          : undefined,
+        reactions: updated.reactions,
+        delivered: updated.delivered,
+        deliveredAt: updated.deliveredAt,
+        read: updated.read,
+        readAt: updated.readAt,
+      }
+
+      try {
+        await sendRtcMessage(wirePayload)
+      } catch (rtcError) {
+        console.warn("Failed to broadcast reaction update via WebRTC", rtcError)
+      }
+    },
+    [sendRtcMessage],
+  )
 
   const handleReactionClick = async (emoji: string) => {
     if (isUpdating) return;
@@ -34,6 +70,7 @@ export function MessageReactions({ message, currentUserId, onReactionUpdate }: M
       
       onReactionUpdate(updatedMessage);
       setShowEmojiPicker(false);
+      await broadcastReactionUpdate(updatedMessage)
     } catch (error) {
       console.error("Failed to update reaction:", error);
     } finally {
