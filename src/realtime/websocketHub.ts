@@ -1,11 +1,8 @@
 import type { Server as HttpServer } from "http";
-
 import type { ObjectId } from "mongodb";
 import { WebSocketServer, WebSocket } from "ws";
 
-
 import type { MessageDocument } from "../lib/mongoClient";
-import { updateMessageStatus } from "../services/messageService";
 import { saveSignal } from "../services/signalingService";
 import type { ApiMessage, ApiSignal } from "../types/api";
 import { toApiMessage } from "../utils/formatters";
@@ -13,8 +10,7 @@ import { toApiMessage } from "../utils/formatters";
 type ClientRegistry = Map<string, Set<WebSocket>>;
 
 type TypingState = "start" | "stop";
-
-type MessageStatus = "sent" | "delivered" | "read";
+type PresenceStatus = "online" | "away" | "offline";
 
 interface SignalOutbound {
   type: "signal";
@@ -39,18 +35,20 @@ interface TypingOutbound {
   payload: TypingPayload;
 }
 
-interface MessageStatusPayload {
-  messageId: string;
-  conversationId: string;
-  senderId: string;
-  recipientId: string;
-  status: MessageStatus;
+interface PresencePayload {
+  peerId: string;
+  status: PresenceStatus;
   timestamp: number;
 }
 
-interface MessageStatusOutbound {
-  type: "message:status-update";
-  payload: MessageStatusPayload;
+interface PresenceUpdateOutbound {
+  type: "presence:update";
+  payload: PresencePayload;
+}
+
+interface PresenceSyncOutbound {
+  type: "presence:sync";
+  payload: PresencePayload[];
 }
 
 interface ErrorOutbound {
@@ -62,12 +60,65 @@ type OutboundEvent =
   | SignalOutbound
   | MessageOutbound
   | TypingOutbound
-  | MessageStatusOutbound
+  | PresenceUpdateOutbound
+  | PresenceSyncOutbound
   | ErrorOutbound
   | Record<string, unknown>;
 
 let registry: ClientRegistry = new Map();
 let wss: WebSocketServer | null = null;
+
+interface PresenceInfo {
+  status: PresenceStatus;
+  updatedAt: number;
+}
+
+const presenceMap: Map<string, PresenceInfo> = new Map();
+
+function serializePresence(): PresencePayload[] {
+  return Array.from(presenceMap.entries()).map(([peerId, info]) => ({
+    peerId,
+    status: info.status,
+    timestamp: info.updatedAt,
+  }));
+}
+
+function emitToAll(message: OutboundEvent, exclude?: WebSocket) {
+  for (const sockets of registry.values()) {
+    for (const socket of sockets.values()) {
+      if (socket !== exclude) {
+        send(socket, message);
+      }
+    }
+  }
+}
+
+function updatePresence(peerId: string, status: PresenceStatus, options?: { notify?: boolean; exclude?: WebSocket }) {
+  const timestamp = Date.now();
+  presenceMap.set(peerId, { status, updatedAt: timestamp });
+  if (options?.notify !== false) {
+    emitToAll(
+      {
+        type: "presence:update",
+        payload: { peerId, status, timestamp },
+      },
+      options?.exclude,
+    );
+  }
+}
+
+export function getPresenceStatus(peerId: string): PresenceStatus {
+  return presenceMap.get(peerId)?.status ?? "offline";
+}
+
+export function getPresenceSnapshot(): Record<string, PresenceStatus> {
+  const snapshot: Record<string, PresenceStatus> = {};
+  for (const [peerId, info] of presenceMap.entries()) {
+    snapshot[peerId] = info.status;
+  }
+  return snapshot;
+}
+
 
 export function initializeWebSocketServer(server: HttpServer): void {
   wss = new WebSocketServer({ server, path: "/ws" });
@@ -90,7 +141,13 @@ export function initializeWebSocketServer(server: HttpServer): void {
             peerId = incomingPeer;
             registerClient(peerId!, socket);
 
+            updatePresence(incomingPeer, "online", { notify: false });
             send(socket, { type: "hello:ack", peerId: incomingPeer });
+            send(socket, {
+              type: "presence:sync",
+              payload: serializePresence(),
+            });
+            updatePresence(incomingPeer, "online", { exclude: socket });
             break;
           }
           case "signal": {
@@ -99,46 +156,6 @@ export function initializeWebSocketServer(server: HttpServer): void {
               return;
             }
             await handleSignalEvent(socket, data);
-            break;
-          }
-          case "messageStatus": {
-            if (!peerId) {
-              send(socket, { type: "error", error: "Handshake not completed." });
-              return;
-            }
-            const messageId =
-              typeof data.messageId === "string" ? data.messageId.trim() : "";
-            const status =
-              data.status === "delivered"
-                ? "delivered"
-                : data.status === "read"
-                  ? "read"
-                  : null;
-            if (!messageId || !status) {
-              send(socket, { type: "error", error: "Invalid message status payload." });
-              break;
-            }
-
-            const result = await updateMessageStatus(messageId, status);
-            if (!result) {
-              send(socket, {
-                type: "error",
-                error: "Unable to update message status.",
-              });
-              break;
-            }
-
-            const payload: MessageStatusPayload = {
-              messageId,
-              conversationId: result.after.conversationId,
-              senderId: result.after.senderId,
-              recipientId: result.after.recipientId,
-              status,
-              timestamp: result.timestamp.getTime(),
-            };
-
-            broadcastMessageStatus(payload);
-            send(socket, { type: "message:status-ack", payload });
             break;
           }
           case "typing": {
@@ -169,6 +186,24 @@ export function initializeWebSocketServer(server: HttpServer): void {
             });
             break;
           }
+          case "presence": {
+            if (!peerId) {
+              send(socket, { type: "error", error: "Handshake not completed." });
+              return;
+            }
+            const status =
+              data.status === "online"
+                ? "online"
+                : data.status === "away"
+                  ? "away"
+                  : null;
+            if (!status) {
+              send(socket, { type: "error", error: "Invalid presence payload." });
+              break;
+            }
+            updatePresence(peerId, status);
+            break;
+          }
           case "ping": {
             send(socket, { type: "pong", ts: Date.now() });
             break;
@@ -186,6 +221,7 @@ export function initializeWebSocketServer(server: HttpServer): void {
     socket.on("close", () => {
       if (peerId) {
         unregisterClient(peerId, socket);
+        updatePresence(peerId, "offline");
       }
     });
   });
@@ -198,25 +234,12 @@ export function initializeWebSocketServer(server: HttpServer): void {
 export function broadcastNewMessage(doc: MessageDocument & { _id?: ObjectId }): void {
   const apiMessage = toApiMessage(doc);
   emitToPeer(apiMessage.recipientId, { type: "message:new", payload: apiMessage });
-  broadcastMessageStatus({
-    messageId: apiMessage.id,
-    conversationId: apiMessage.conversationId,
-    senderId: apiMessage.senderId,
-    recipientId: apiMessage.recipientId,
-    status: "sent",
-    timestamp: doc.createdAt.getTime(),
-  });
 }
 
 export function broadcastSignal(signal: ApiSignal, excludePeerId?: string): void {
   if (excludePeerId !== signal.recipientId) {
     emitToPeer(signal.recipientId, { type: "signal", payload: signal });
   }
-}
-
-export function broadcastMessageStatus(payload: MessageStatusPayload): void {
-  emitToPeer(payload.senderId, { type: "message:status-update", payload });
-  emitToPeer(payload.recipientId, { type: "message:status-update", payload });
 }
 
 export function broadcastTyping(payload: TypingPayload): void {

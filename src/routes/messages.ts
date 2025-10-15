@@ -5,11 +5,7 @@ import {
   getMessagesCollection,
   type MessageDocument,
 } from "../lib/mongoClient";
-import {
-  broadcastMessageStatus,
-  broadcastNewMessage,
-} from "../realtime/websocketHub";
-import { updateMessageStatus } from "../services/messageService";
+import { broadcastNewMessage, getPresenceStatus } from "../realtime/websocketHub";
 import { toApiMessage } from "../utils/formatters";
 
 interface SendMessageRequestBody {
@@ -177,7 +173,6 @@ router.get("/pending/:recipientId", async (req, res, next) => {
       .find(
         {
           recipientId: recipientId.trim(),
-          delivered: false,
           ...cursorFilter,
         },
         { sort: { createdAt: 1 } },
@@ -188,39 +183,8 @@ router.get("/pending/:recipientId", async (req, res, next) => {
       return res.json({ messages: [] });
     }
 
-    const ids = pendingMessages.map((doc) => doc._id).filter(Boolean) as ObjectId[];
-
-    const deliveredAt = new Date();
-
-    await messages.updateMany(
-      { _id: { $in: ids } },
-      { $set: { delivered: true, deliveredAt } },
-    );
-
-    for (const doc of pendingMessages) {
-      if (!doc._id) {
-        continue;
-      }
-      const messageId = doc._id.toString();
-      broadcastMessageStatus({
-        messageId,
-        conversationId: doc.conversationId,
-        senderId: doc.senderId,
-        recipientId: doc.recipientId,
-        status: "delivered",
-        timestamp: deliveredAt.getTime(),
-      });
-    }
-
     return res.json({
-      messages: pendingMessages.map((doc) => {
-        const formatted = toApiMessage(doc);
-        return {
-          ...formatted,
-          delivered: true,
-          deliveredAt: formatted.deliveredAt ?? deliveredAt.toISOString(),
-        };
-      }),
+      messages: pendingMessages.map((doc) => toApiMessage(doc)),
     });
   } catch (error) {
     next(error);
@@ -244,7 +208,6 @@ router.get("/conversations", async (req, res, next) => {
       .aggregate<{
         _id: string;
         lastMessage: MessageDocument & { _id: ObjectId };
-        unreadCount: number;
       }>([
         {
           $match: {
@@ -256,20 +219,6 @@ router.get("/conversations", async (req, res, next) => {
           $group: {
             _id: "$conversationId",
             lastMessage: { $first: "$$ROOT" },
-            unreadCount: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: ["$recipientId", userId] },
-                      { $eq: ["$read", false] },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
           },
         },
         { $sort: { "lastMessage.createdAt": -1 } },
@@ -280,11 +229,12 @@ router.get("/conversations", async (req, res, next) => {
       const [peerA, peerB] = entry._id.split("#");
       const peerId = peerA === userId ? peerB : peerA;
       const lastMessage = toApiMessage(entry.lastMessage);
+      const peerStatus = getPresenceStatus(peerId);
       return {
         conversationId: entry._id,
         peerId,
         lastMessage,
-        unreadCount: entry.unreadCount,
+        peerStatus,
       };
     });
 
@@ -294,44 +244,6 @@ router.get("/conversations", async (req, res, next) => {
   }
 });
 
-router.patch("/:messageId/status", async (req, res, next) => {
-  try {
-    const { messageId } = req.params;
-    const status = req.body?.status;
-
-    if (status !== "delivered" && status !== "read") {
-      return res.status(400).json({
-        error: "status must be either 'delivered' or 'read'.",
-      });
-    }
-
-    const result = await updateMessageStatus(messageId, status);
-
-    if (!result) {
-      return res.status(404).json({ error: "Message not found." });
-    }
-
-    const timestamp = result.timestamp.getTime();
-    const apiMessage = toApiMessage(result.after);
-
-    broadcastMessageStatus({
-      messageId: apiMessage.id,
-      conversationId: apiMessage.conversationId,
-      senderId: apiMessage.senderId,
-      recipientId: apiMessage.recipientId,
-      status,
-      timestamp,
-    });
-
-    return res.json({
-      message: apiMessage,
-      status,
-      timestamp: new Date(timestamp).toISOString(),
-    });
-  } catch (error) {
-    next(error);
-  }
-});
 
 // Add reaction to a message
 router.post("/:messageId/reactions", async (req, res, next) => {

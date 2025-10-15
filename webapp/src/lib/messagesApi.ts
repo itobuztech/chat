@@ -5,10 +5,6 @@ export interface ChatMessage {
   recipientId: string;
   content: string;
   createdAt: string;
-  delivered: boolean;
-  deliveredAt?: string;
-  read: boolean;
-  readAt?: string;
   replyTo?: MessageReply;
   reactions?: {
     [emoji: string]: {
@@ -16,6 +12,10 @@ export interface ChatMessage {
       count: number;
     };
   };
+  delivered: boolean;
+  deliveredAt: string | null;
+  read: boolean;
+  readAt: string | null;
 }
 
 export interface SendMessagePayload {
@@ -25,11 +25,13 @@ export interface SendMessagePayload {
   replyToId?: string;
 }
 
+export type PresenceStatus = "online" | "away" | "offline";
+
 export interface ConversationSummary {
   conversationId: string;
   peerId: string;
   lastMessage: ChatMessage;
-  unreadCount: number;
+  peerStatus: PresenceStatus;
 }
 
 export interface MessageReply {

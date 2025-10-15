@@ -5,10 +5,6 @@ export interface ApiMessage {
   recipientId: string;
   content: string;
   createdAt: string;
-  delivered: boolean;
-  deliveredAt?: string;
-  read: boolean;
-  readAt?: string;
   replyTo?: {
     id: string;
     senderId: string;
@@ -31,6 +27,4 @@ export interface ApiSignal {
   type: string;
   payload: Record<string, unknown> | null;
   createdAt: string;
-  consumed: boolean;
-  consumedAt?: string;
 }

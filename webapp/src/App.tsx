@@ -12,12 +12,12 @@ import { Loader2, MessageSquareReply, Send, X } from "lucide-react"
 import {
   type ChatMessage,
   type ConversationSummary,
+  type PresenceStatus,
   fetchConversation,
   fetchConversations,
   sendMessage,
 } from "./lib/messagesApi"
 import useWebRtcMessaging, {
-  type MessageStatusUpdate,
   type WebRtcMessage,
 } from "./hooks/useWebRtcMessaging"
 import { Button } from "./components/ui/button"
@@ -63,11 +63,11 @@ function App(): JSX.Element {
   const [conversationsError, setConversationsError] = useState<string | null>(null)
   const [peerTyping, setPeerTyping] = useState(false)
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
+  const [presence, setPresence] = useState<Record<string, PresenceStatus>>({})
 
   const typingTimeoutRef = useRef<number | null>(null)
   const typingActiveRef = useRef(false)
   const peerTypingTimeoutRef = useRef<number | null>(null)
-  const readAckedRef = useRef<Set<string>>(new Set())
   const previousSocketStatusRef = useRef<string>("disconnected")
 
   const normalizedSelfId = selfId.trim()
@@ -108,6 +108,18 @@ function App(): JSX.Element {
     try {
       const list = await fetchConversations(normalizedSelfId)
       setConversations(list)
+      setPresence((prev) => {
+        const next = { ...prev }
+        list.forEach((item) => {
+          next[item.peerId] = item.peerStatus
+        })
+        if (normalizedSelfId) {
+          const defaultStatus =
+            typeof document !== "undefined" && document.hidden ? "away" : "online"
+          next[normalizedSelfId] = prev[normalizedSelfId] ?? defaultStatus
+        }
+        return next
+      })
     } catch (loadError) {
       const message =
         loadError instanceof Error
@@ -118,6 +130,20 @@ function App(): JSX.Element {
       setIsConversationsLoading(false)
     }
   }, [normalizedSelfId])
+
+  const handlePresenceUpdate = useCallback(
+    (peer: string, status: PresenceStatus) => {
+      setPresence((prev) => ({ ...prev, [peer]: status }))
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.peerId === peer
+            ? { ...conversation, peerStatus: status }
+            : conversation,
+        ),
+      )
+    },
+    [],
+  )
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -205,96 +231,73 @@ function App(): JSX.Element {
     [handlePeerTyping, loadConversations],
   )
 
-  const handleStatusUpdate = useCallback(
-    (update: MessageStatusUpdate) => {
-      if (update.status === "sent") {
-        return
-      }
-      setMessages((prev) =>
-        prev.map((message) => {
-          if (message.id !== update.messageId) {
-            return message
-          }
-          const next = { ...message }
-          if (update.status === "delivered") {
-            next.delivered = true
-            next.deliveredAt = new Date(update.timestamp).toISOString()
-          }
-          if (update.status === "read") {
-            next.read = true
-            next.readAt = new Date(update.timestamp).toISOString()
-            next.delivered = true
-            next.deliveredAt = next.deliveredAt ?? next.readAt
-            readAckedRef.current.add(update.messageId)
-          }
-          return next
-        }),
-      )
-      void loadConversations()
-    },
-    [loadConversations],
-  )
-
   const {
-    status: rtcStatus,
     socketStatus,
     error: rtcError,
-    dataChannelReady,
     sendMessage: sendViaRtc,
     sendTyping,
-    sendStatus,
+    sendPresence,
   } = useWebRtcMessaging({
     selfId: normalizedSelfId,
     peerId: normalizedPeerId,
     enabled: conversationReady,
     onMessage: appendIncomingMessage,
     onTyping: handlePeerTyping,
-    onStatus: handleStatusUpdate,
+    onPresence: handlePresenceUpdate,
   })
+
+  useEffect(() => {
+    if (
+      !conversationReady ||
+      !normalizedSelfId ||
+      typeof document === "undefined" ||
+      typeof window === "undefined"
+    ) {
+      return
+    }
+
+    const syncPresenceToVisibility = () => {
+      const nextStatus: PresenceStatus = document.hidden ? "away" : "online"
+      sendPresence(nextStatus)
+    }
+
+    const markActive = () => {
+      if (!document.hidden) {
+        sendPresence("online")
+      }
+    }
+
+    syncPresenceToVisibility()
+
+    document.addEventListener("visibilitychange", syncPresenceToVisibility)
+    window.addEventListener("focus", markActive)
+    window.addEventListener("blur", syncPresenceToVisibility)
+    window.addEventListener("pointerdown", markActive)
+    window.addEventListener("keydown", markActive)
+
+    return () => {
+      document.removeEventListener("visibilitychange", syncPresenceToVisibility)
+      window.removeEventListener("focus", markActive)
+      window.removeEventListener("blur", syncPresenceToVisibility)
+      window.removeEventListener("pointerdown", markActive)
+      window.removeEventListener("keydown", markActive)
+    }
+  }, [conversationReady, normalizedSelfId, sendPresence])
 
   const isMessageEmpty = messageInput.trim().length === 0
   const canSendMessage = conversationReady && !isSending && !isMessageEmpty
 
-  const rtcStatusLabel = useMemo(() => {
-    switch (rtcStatus) {
-      case "fetching-ice":
-        return "Fetching ICE"
-      case "waiting":
-        return "Waiting"
-      case "negotiating":
-        return "Negotiating"
-      default:
-        return rtcStatus.charAt(0).toUpperCase() + rtcStatus.slice(1)
-    }
-  }, [rtcStatus])
+  const selfPresenceStatus: PresenceStatus | null =
+    normalizedSelfId.length > 0 ? presence[normalizedSelfId] ?? "offline" : null
 
-  const socketStatusLabel = useMemo(() => {
-    switch (socketStatus) {
-      case "connected":
-        return "Connected"
-      case "connecting":
-        return "Connecting"
-      case "disconnected":
-      default:
-        return "Disconnected"
-    }
-  }, [socketStatus])
-
-  const getMessageStatusLabel = useCallback(
-    (message: ChatMessage): { label: string; className: string } | null => {
-      if (message.senderId !== normalizedSelfId) {
-        return null
-      }
-      if (message.read) {
-        return { label: "Read", className: "text-sky-400" }
-      }
-      if (message.delivered) {
-        return { label: "Delivered", className: "text-sky-200" }
-      }
-      return { label: "Sent", className: "text-muted-foreground" }
-    },
-    [normalizedSelfId],
-  )
+  const peerPresenceStatus: PresenceStatus | null =
+    normalizedPeerId.length > 0
+      ? presence[normalizedPeerId] ??
+        conversations.find(
+          (conversation) => conversation.peerId === normalizedPeerId,
+        )?.peerStatus ??
+        "offline"
+      : null
 
   const formatConversationPreview = useCallback((content: string): string => {
     const normalized = content.trim().replace(/\s+/g, " ")
@@ -499,31 +502,6 @@ function App(): JSX.Element {
     }
   }, [conversationReady, normalizedPeerId, normalizedSelfId, socketStatus])
 
-  useEffect(() => {
-    if (!conversationReady) {
-      readAckedRef.current.clear()
-      return
-    }
-
-    sortedMessages.forEach((message) => {
-      if (
-        message.recipientId === normalizedSelfId &&
-        !message.read &&
-        !readAckedRef.current.has(message.id)
-      ) {
-        readAckedRef.current.add(message.id)
-        void sendStatus(message.id, "read")
-      }
-    })
-  }, [conversationReady, normalizedSelfId, sendStatus, sortedMessages])
-
-  useEffect(() => {
-    readAckedRef.current.clear()
-  }, [normalizedPeerId, normalizedSelfId])
-
-  const dataChannelLabel = dataChannelReady ? "Open" : "Closed"
-  const dataChannelStatusClass = dataChannelReady ? "bg-emerald-500/20 text-emerald-300" : "bg-muted text-muted-foreground"
-
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex h-screen max-w-6xl flex-col gap-4 p-4 md:flex-row">
@@ -532,8 +510,7 @@ function App(): JSX.Element {
             <div>
               <CardTitle className="text-xl">P2P Chat</CardTitle>
               <CardDescription>
-                Configure your identifiers, monitor connection health, and pick a
-                conversation to start chatting.
+                Configure your identifiers and pick a conversation to start chatting.
               </CardDescription>
             </div>
 
@@ -562,94 +539,109 @@ function App(): JSX.Element {
           </CardHeader>
           <CardContent className="flex flex-1 flex-col gap-4 overflow-hidden">
             <ScrollArea className="inset-0">
-            <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/30 p-3 text-xs">
-              <StatusRow label="WebRTC" value={rtcStatusLabel} />
-              <StatusRow label="Data Channel" value={dataChannelLabel} badgeClassName={dataChannelStatusClass} />
-              <StatusRow label="WebSocket" value={socketStatusLabel} />
-            </div>
+              <div className="flex flex-col gap-4">
+                {(selfPresenceStatus || peerPresenceStatus) && (
+                  <div className="space-y-2 rounded-xl border border-border/60 bg-muted/30 p-3 text-xs">
+                    {selfPresenceStatus && (
+                      <PresenceRow
+                        label={normalizedSelfId || "You"}
+                        status={selfPresenceStatus}
+                      />
+                    )}
+                    {normalizedPeerId &&
+                      peerPresenceStatus &&
+                      (normalizedPeerId !== normalizedSelfId || !selfPresenceStatus) && (
+                        <PresenceRow
+                          label={normalizedPeerId}
+                          status={peerPresenceStatus}
+                        />
+                      )}
+                  </div>
+                )}
 
-            {statusMessage && (
-              <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary-foreground/80">
-                {statusMessage}
-              </div>
-            )}
-            {error && (
-              <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
-            )}
-            {rtcError && (
-              <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
-                {rtcError}
-              </div>
-            )}
+                {statusMessage && (
+                  <div className="rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary-foreground/80">
+                    {statusMessage}
+                  </div>
+                )}
+                {error && (
+                  <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                    {error}
+                  </div>
+                )}
+                {rtcError && (
+                  <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                    {rtcError}
+                  </div>
+                )}
 
-            <div className="flex items-center justify-between text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              <span>Conversations</span>
-              {isConversationsLoading && (
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Loading
-                </span>
-              )}
-            </div>
-
-            <div className="relative flex-1">
-              <ScrollArea className="inset-0">
-                <div className="space-y-1">
-                  {conversationsError && (
-                    <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
-                      {conversationsError}
-                    </div>
-                  )}
-                  {!isConversationsLoading &&
-                  conversationsError === null &&
-                  conversations.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      No conversations yet.
-                    </p>
-                  ) : (
-                    conversations.map((conversation) => {
-                      const active = conversation.peerId === normalizedPeerId
-                      const replyPreview = conversation.lastMessage.replyTo
-                        ? `↪ ${formatConversationPreview(conversation.lastMessage.replyTo.content)} `
-                        : ""
-                      const preview = `${replyPreview}${formatConversationPreview(
-                        conversation.lastMessage.content,
-                      )}`
-                      const displayTime = formatConversationTime(
-                        conversation.lastMessage.createdAt,
-                      )
-                      const unread = conversation.unreadCount
-                      return (
-                        <Button
-                          type="button"
-                          key={conversation.conversationId}
-                          variant={active ? "secondary" : "ghost"}
-                          className="w-full justify-start rounded-xl px-3 py-3 text-left"
-                          onClick={() => handleSelectConversation(conversation)}
-                        >
-                          <div className="flex w-full flex-col gap-1">
-                            <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span className="font-semibold text-foreground">
-                                {conversation.peerId}
-                              </span>
-                              <span>{displayTime}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <span className="line-clamp-1">{preview}</span>
-                              {unread > 0 && (
-                                <Badge variant="muted">{unread}</Badge>
-                              )}
-                            </div>
-                          </div>
-                        </Button>
-                      )
-                    })
+                <div className="flex items-center justify-between text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  <span>Conversations</span>
+                  {isConversationsLoading && (
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Loading
+                    </span>
                   )}
                 </div>
-              </ScrollArea>
-            </div>
+
+                <div className="relative flex-1">
+                  <ScrollArea className="inset-0">
+                    <div className="space-y-1">
+                      {conversationsError && (
+                        <div className="rounded-lg bg-destructive/15 px-3 py-2 text-xs text-destructive">
+                          {conversationsError}
+                        </div>
+                      )}
+                      {!isConversationsLoading &&
+                      conversationsError === null &&
+                      conversations.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No conversations yet.
+                        </p>
+                      ) : (
+                        conversations.map((conversation) => {
+                          const active = conversation.peerId === normalizedPeerId
+                          const replyPreview = conversation.lastMessage.replyTo
+                            ? `↪ ${formatConversationPreview(conversation.lastMessage.replyTo.content)} `
+                            : ""
+                          const preview = `${replyPreview}${formatConversationPreview(
+                            conversation.lastMessage.content,
+                          )}`
+                          const displayTime = formatConversationTime(
+                            conversation.lastMessage.createdAt,
+                          )
+                          const unread = conversation.unreadCount
+                          return (
+                            <Button
+                              type="button"
+                              key={conversation.conversationId}
+                              variant={active ? "secondary" : "ghost"}
+                              className="w-full justify-start rounded-xl px-3 py-3 text-left"
+                              onClick={() => handleSelectConversation(conversation)}
+                            >
+                              <div className="flex w-full flex-col gap-1">
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <span className="font-semibold text-foreground">
+                                    {conversation.peerId}
+                                  </span>
+                                  <span>{displayTime}</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <span className="line-clamp-1">{preview}</span>
+                                  {unread > 0 && (
+                                    <Badge variant="muted">{unread}</Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </Button>
+                          )
+                        })
+                      )}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </div>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -668,11 +660,17 @@ function App(): JSX.Element {
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <Badge variant="outline">WebRTC: {rtcStatusLabel}</Badge>
-              <Badge variant="outline">WS: {socketStatusLabel}</Badge>
-              <Badge className={cn("bg-muted text-muted-foreground", dataChannelStatusClass)}>
-                Data channel: {dataChannelLabel}
-              </Badge>
+              {selfPresenceStatus && (
+                <PresenceChip
+                  label={normalizedSelfId ? `You (${normalizedSelfId})` : "You"}
+                  status={selfPresenceStatus}
+                />
+              )}
+              {normalizedPeerId &&
+                peerPresenceStatus &&
+                (normalizedPeerId !== normalizedSelfId || !selfPresenceStatus) && (
+                  <PresenceChip label={normalizedPeerId} status={peerPresenceStatus} />
+                )}
             </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
@@ -695,7 +693,6 @@ function App(): JSX.Element {
                   ) : (
                     sortedMessages.map((message) => {
                       const isMine = message.senderId === normalizedSelfId
-                      const statusInfo = getMessageStatusLabel(message)
                       return (
                         <div
                           key={message.id}
@@ -740,11 +737,6 @@ function App(): JSX.Element {
                           </div>
 
                           <div className="flex items-center gap-2">
-                            {statusInfo && (
-                              <span className={cn("text-xs", statusInfo.className)}>
-                                {statusInfo.label}
-                              </span>
-                            )}
                             <Button
                               type="button"
                               variant="ghost"
@@ -822,13 +814,18 @@ function App(): JSX.Element {
   )
 }
 
-interface StatusRowProps {
-  label: string
-  value: string
-  badgeClassName?: string
+const presenceBadgeStyles: Record<PresenceStatus, string> = {
+  online: "border-emerald-500/40 bg-emerald-500/15 text-emerald-500",
+  away: "border-amber-500/40 bg-amber-500/15 text-amber-500",
+  offline: "border-border/60 bg-muted text-muted-foreground",
 }
 
-function StatusRow({ label, value, badgeClassName }: StatusRowProps) {
+interface PresenceRowProps {
+  label: string
+  status: PresenceStatus
+}
+
+function PresenceRow({ label, status }: PresenceRowProps) {
   return (
     <div className="flex items-center justify-between rounded-lg bg-background/60 px-3 py-2">
       <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -836,11 +833,31 @@ function StatusRow({ label, value, badgeClassName }: StatusRowProps) {
       </span>
       <Badge
         variant="outline"
-        className={cn("border-border/60 text-xs font-semibold", badgeClassName)}
+        className={cn("text-xs font-semibold capitalize", presenceBadgeStyles[status])}
       >
-        {value}
+        {status}
       </Badge>
     </div>
+  )
+}
+
+interface PresenceChipProps {
+  label: string
+  status: PresenceStatus
+}
+
+function PresenceChip({ label, status }: PresenceChipProps) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "flex items-center gap-1 text-xs font-semibold capitalize",
+        presenceBadgeStyles[status],
+      )}
+    >
+      <span className="text-muted-foreground/80">{label}</span>
+      <span>{status}</span>
+    </Badge>
   )
 }
 

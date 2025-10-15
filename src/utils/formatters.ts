@@ -17,10 +17,6 @@ export function toApiMessage(doc: MessageWithId): ApiMessage {
     recipientId: doc.recipientId,
     content: doc.content,
     createdAt: doc.createdAt.toISOString(),
-    delivered: Boolean(doc.delivered),
-    deliveredAt: doc.deliveredAt?.toISOString(),
-    read: Boolean(doc.read),
-    readAt: doc.readAt?.toISOString(),
     replyTo: doc.replyTo
       ? {
           id: doc.replyTo.messageId.toString(),
@@ -42,7 +38,5 @@ export function toApiSignal(doc: SignalWithId): ApiSignal {
     type: doc.type,
     payload: doc.payload,
     createdAt: doc.createdAt.toISOString(),
-    consumed: doc.consumed,
-    consumedAt: doc.consumedAt?.toISOString(),
   };
 }

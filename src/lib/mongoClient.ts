@@ -16,10 +16,6 @@ export interface MessageDocument {
   recipientId: string;
   content: string;
   createdAt: Date;
-  delivered: boolean;
-  deliveredAt?: Date;
-  read: boolean;
-  readAt?: Date;
   replyTo?: {
     messageId: ObjectId;
     senderId: string;

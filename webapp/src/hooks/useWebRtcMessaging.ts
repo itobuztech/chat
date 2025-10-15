@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE_URL } from "../lib/messagesApi.js";
+import type { PresenceStatus } from "../lib/messagesApi.js";
 import {
   fetchIceConfig,
   fetchPendingSignals,
@@ -20,8 +21,6 @@ type ConnectionStatus =
 
 type SocketStatus = "connecting" | "connected" | "disconnected";
 type TypingState = "start" | "stop";
-type MessageStatus = "sent" | "delivered" | "read";
-type UpdatableStatus = Exclude<MessageStatus, "sent">;
 
 type TypingPayload = {
   senderId: string;
@@ -31,19 +30,15 @@ type TypingPayload = {
   timestamp: number;
 };
 
+type PresenceUpdatePayload = {
+  peerId: string;
+  status: PresenceStatus;
+  timestamp: number;
+};
+
 type ChannelEnvelope =
   | { kind: "message"; payload: WebRtcMessage }
-  | { kind: "typing"; payload: TypingPayload }
-  | { kind: "status"; payload: MessageStatusUpdate };
-
-export interface MessageStatusUpdate {
-  messageId: string;
-  conversationId: string;
-  senderId: string;
-  recipientId: string;
-  status: MessageStatus;
-  timestamp: number;
-}
+  | { kind: "typing"; payload: TypingPayload };
 
 export interface WebRtcMessage {
   id: string;
@@ -52,10 +47,6 @@ export interface WebRtcMessage {
   recipientId: string;
   content: string;
   createdAt: string;
-  delivered: boolean;
-  deliveredAt?: string;
-  read: boolean;
-  readAt?: string;
   replyTo?: MessageReplySnapshot;
   reactions?: {
     [emoji: string]: {
@@ -63,6 +54,10 @@ export interface WebRtcMessage {
       count: number;
     };
   };
+  delivered: boolean;
+  deliveredAt: string | null;
+  read: boolean;
+  readAt: string | null;
 }
 
 interface MessageReplySnapshot {
@@ -78,7 +73,7 @@ interface UseWebRtcMessagingOptions {
   enabled: boolean;
   onMessage: (message: WebRtcMessage) => void;
   onTyping?: (typing: boolean) => void;
-  onStatus?: (update: MessageStatusUpdate) => void;
+  onPresence?: (peerId: string, status: PresenceStatus) => void;
 }
 
 interface UseWebRtcMessagingResult {
@@ -88,7 +83,7 @@ interface UseWebRtcMessagingResult {
   dataChannelReady: boolean;
   sendMessage: (message: WebRtcMessage) => Promise<void>;
   sendTyping: (typing: boolean) => Promise<void>;
-  sendStatus: (messageId: string, status: UpdatableStatus) => Promise<void>;
+  sendPresence: (status: Exclude<PresenceStatus, "offline">) => void;
   disconnect: () => Promise<void>;
 }
 
@@ -126,7 +121,7 @@ export function useWebRtcMessaging({
   enabled,
   onMessage,
   onTyping,
-  onStatus,
+  onPresence,
 }: UseWebRtcMessagingOptions): UseWebRtcMessagingResult {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("disconnected");
@@ -143,80 +138,6 @@ export function useWebRtcMessaging({
   const isInitiator = useMemo(
     () => normalizedSelfId < normalizedPeerId,
     [normalizedPeerId, normalizedSelfId],
-  );
-
-  const sendStatus = useCallback(
-    async (messageId: string, status: UpdatableStatus) => {
-      if (!messageId || !normalizedSelfId || !normalizedPeerId) {
-        return;
-      }
-
-      const baseTimestamp = Date.now();
-      const basePayload: MessageStatusUpdate = {
-        messageId,
-        conversationId,
-        senderId: normalizedSelfId,
-        recipientId: normalizedPeerId,
-        status,
-        timestamp: baseTimestamp,
-      };
-
-      onStatus?.(basePayload);
-
-      const channel = dataChannelRef.current;
-      if (channel && channel.readyState === "open") {
-        channel.send(JSON.stringify({ kind: "status", payload: basePayload }));
-      }
-
-      let persistedPayload: MessageStatusUpdate | null = null;
-      let persisted = false;
-
-      const socket = wsRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({
-            type: "messageStatus",
-            messageId,
-            status,
-            timestamp: baseTimestamp,
-          }),
-        );
-        persisted = true;
-      }
-
-      if (!persisted) {
-        try {
-          const response = await fetch(
-            `${API_BASE_URL}/api/messages/${encodeURIComponent(messageId)}/status`,
-            {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ status }),
-            },
-          );
-          if (response.ok) {
-            const body = (await response.json()) as {
-              status: MessageStatus;
-              timestamp: string;
-            };
-            persistedPayload = {
-              ...basePayload,
-              status: body.status as MessageStatus,
-              timestamp: new Date(body.timestamp).getTime(),
-            };
-          } else {
-            console.error("Failed to persist message status", await response.text());
-          }
-        } catch (error) {
-          console.error("Failed to persist message status", error);
-        }
-      }
-
-      if (persistedPayload && persistedPayload.timestamp !== basePayload.timestamp) {
-        onStatus?.(persistedPayload);
-      }
-    },
-    [conversationId, normalizedPeerId, normalizedSelfId, onStatus],
   );
 
   const wsUrl = useMemo(() => deriveWebSocketUrl(API_BASE_URL), []);
@@ -357,23 +278,15 @@ export function useWebRtcMessaging({
           }
           if (envelope.kind === "message" && envelope.payload) {
             onMessage(envelope.payload);
-            if (envelope.payload.recipientId === normalizedSelfId) {
-              void sendStatus(envelope.payload.id, "delivered");
-            }
           } else if (envelope.kind === "typing" && envelope.payload) {
             handleTypingPayload(envelope.payload);
-          } else if (envelope.kind === "status" && envelope.payload) {
-            const statusPayload = envelope.payload;
-            if (statusPayload.senderId !== normalizedSelfId) {
-              onStatus?.(statusPayload);
-            }
           }
         } catch (parseError) {
           console.warn("Failed to parse incoming WebRTC message", parseError);
         }
       };
     },
-    [handleTypingPayload, onMessage, onStatus, normalizedSelfId, resetConnectionRefs, sendStatus, setDataChannelReady],
+    [handleTypingPayload, onMessage, resetConnectionRefs, setDataChannelReady],
   );
 
   const sendSignalEnvelope = useCallback(
@@ -685,51 +598,39 @@ export function useWebRtcMessaging({
               break;
             }
             case "message:new":
-            case "message:status":
-              if (data.payload) {
-                const payload = data.payload as {
-                  id: string;
-                  conversationId: string;
-                  senderId: string;
-                  recipientId: string;
-                  content: string;
-                  createdAt: string;
-                  delivered: boolean;
-                  deliveredAt?: string | null;
-                  read: boolean;
-                  readAt?: string | null;
-                };
-                if (payload && typeof payload.id === "string") {
-                  onMessage({
-                    id: payload.id,
-                    conversationId: payload.conversationId,
-                    senderId: payload.senderId,
-                    recipientId: payload.recipientId,
-                    content: payload.content,
-                    createdAt: payload.createdAt,
-                    delivered: Boolean(payload.delivered),
-                    deliveredAt: payload.deliveredAt ?? undefined,
-                    read: Boolean(payload.read),
-                    readAt: payload.readAt ?? undefined,
-                  });
-                  if (payload.recipientId === normalizedSelfId) {
-                    void sendStatus(payload.id, "delivered");
+              if (data.payload && typeof data.payload.id === "string") {
+                onMessage(data.payload as WebRtcMessage);
+              }
+              break;
+            case "presence:update": {
+              const payload = data.payload as Partial<PresenceUpdatePayload>;
+              if (payload && typeof payload.peerId === "string") {
+                const status =
+                  payload.status === "away"
+                    ? "away"
+                    : payload.status === "online"
+                      ? "online"
+                      : "offline";
+                onPresence?.(payload.peerId, status);
+              }
+              break;
+            }
+            case "presence:sync": {
+              if (Array.isArray(data.payload)) {
+                (data.payload as PresenceUpdatePayload[]).forEach((entry) => {
+                  if (entry && typeof entry.peerId === "string") {
+                    const status =
+                      entry.status === "away"
+                        ? "away"
+                        : entry.status === "online"
+                          ? "online"
+                          : "offline";
+                    onPresence?.(entry.peerId, status);
                   }
-                }
+                });
               }
               break;
-            case "message:status-update":
-              if (data.payload) {
-                const payload = data.payload as MessageStatusUpdate;
-                onStatus?.(payload);
-              }
-              break;
-            case "message:status-ack":
-              if (data.payload) {
-                const payload = data.payload as MessageStatusUpdate;
-                onStatus?.(payload);
-              }
-              break;
+            }
             case "error":
               if (typeof data.error === "string") {
                 setError(data.error);
@@ -798,8 +699,7 @@ export function useWebRtcMessaging({
     normalizedPeerId,
     normalizedSelfId,
     onMessage,
-    onStatus,
-    sendStatus,
+    onPresence,
     wsUrl,
   ]);
 
@@ -885,6 +785,20 @@ export function useWebRtcMessaging({
     [conversationId, normalizedPeerId, normalizedSelfId],
   );
 
+  const sendPresence = useCallback(
+    (status: Exclude<PresenceStatus, "offline">) => {
+      if (!normalizedSelfId) {
+        return;
+      }
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "presence", status }));
+      }
+      onPresence?.(normalizedSelfId, status);
+    },
+    [normalizedSelfId, onPresence],
+  );
+
   useEffect(() => {
     if (
       !enabled ||
@@ -944,7 +858,7 @@ export function useWebRtcMessaging({
     dataChannelReady,
     sendMessage,
     sendTyping,
-    sendStatus,
+    sendPresence,
     disconnect,
   };
 }
