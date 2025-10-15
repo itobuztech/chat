@@ -71,7 +71,7 @@ interface UseWebRtcMessagingOptions {
   selfId: string;
   peerId: string;
   enabled: boolean;
-  onMessage: (message: WebRtcMessage) => void;
+  onMessage?: (message: WebRtcMessage) => void;
   onTyping?: (typing: boolean) => void;
   onPresence?: (peerId: string, status: PresenceStatus) => void;
 }
@@ -123,6 +123,7 @@ export function useWebRtcMessaging({
   onTyping,
   onPresence,
 }: UseWebRtcMessagingOptions): UseWebRtcMessagingResult {
+  console.log("useWebRtcMessaging", { selfId, peerId, enabled });
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
@@ -277,7 +278,7 @@ export function useWebRtcMessaging({
             return;
           }
           if (envelope.kind === "message" && envelope.payload) {
-            onMessage(envelope.payload);
+            onMessage && onMessage(envelope.payload);
           } else if (envelope.kind === "typing" && envelope.payload) {
             handleTypingPayload(envelope.payload);
           }
@@ -599,7 +600,7 @@ export function useWebRtcMessaging({
             }
             case "message:new":
               if (data.payload && typeof data.payload.id === "string") {
-                onMessage(data.payload as WebRtcMessage);
+                onMessage && onMessage(data.payload as WebRtcMessage);
               }
               break;
             case "presence:update": {

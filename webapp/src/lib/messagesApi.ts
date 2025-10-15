@@ -32,6 +32,7 @@ export interface ConversationSummary {
   peerId: string;
   lastMessage: ChatMessage;
   peerStatus: PresenceStatus;
+  unreadCount: number;
 }
 
 export interface MessageReply {
