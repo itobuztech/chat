@@ -4,6 +4,7 @@ import { addReaction, removeReaction, type ChatMessage } from "../../lib/message
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { LaughIcon } from 'lucide-react'
 
 interface MessageReactionsProps {
   message: ChatMessage;
@@ -44,7 +45,7 @@ export function MessageReactions({ message, currentUserId, onReactionUpdate }: M
   const hasReactions = Object.keys(reactions).length > 0
 
   return (
-    <div className="flex flex-col items-end gap-2 text-xs">
+    <div className="flex flex-row items-end gap-2">
       {hasReactions && (
         <div className="flex flex-wrap gap-2">
           {Object.entries(reactions).map(([emoji, data]) => {
@@ -72,12 +73,12 @@ export function MessageReactions({ message, currentUserId, onReactionUpdate }: M
           variant="ghost"
           size="xs"
           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-          title="Add reaction"
           disabled={isUpdating}
         >
-          😊 Add reaction
+          <LaughIcon className="mr-1 h-3.5 w-3.5" />
+          Add reaction
         </Button>
-        
+
         {showEmojiPicker && (
           <div className="absolute right-0 z-10 mt-2 flex w-40 flex-wrap gap-2 rounded-lg border border-border/60 bg-popover p-3 shadow-lg">
             {COMMON_EMOJIS.map((emoji) => (

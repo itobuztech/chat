@@ -141,6 +141,11 @@ export function useWebRtcMessaging({
     [normalizedPeerId, normalizedSelfId],
   );
 
+  const isPolite = useMemo(
+    () => normalizedSelfId > normalizedPeerId,
+    [normalizedPeerId, normalizedSelfId],
+  );
+
   const wsUrl = useMemo(() => deriveWebSocketUrl(API_BASE_URL), []);
 
   const [dataChannelReady, setDataChannelReady] = useState(false);
@@ -155,6 +160,10 @@ export function useWebRtcMessaging({
   const backlogDrainedRef = useRef(false);
   const startInFlightRef = useRef(false);
   const typingStateRef = useRef<TypingState>("stop");
+  const makingOfferRef = useRef(false);
+  const ignoreOfferRef = useRef(false);
+  const settingRemoteAnswerRef = useRef(false);
+  const processedSignalIdsRef = useRef(new Set<string>());
 
   const resetConnectionRefs = useCallback(() => {
     if (dataChannelRef.current) {
@@ -184,6 +193,10 @@ export function useWebRtcMessaging({
     sessionIdRef.current = null;
     startInFlightRef.current = false;
     typingStateRef.current = "stop";
+    makingOfferRef.current = false;
+    ignoreOfferRef.current = false;
+    settingRemoteAnswerRef.current = false;
+    processedSignalIdsRef.current.clear();
     setDataChannelReady(false);
   }, [setDataChannelReady]);
 
@@ -408,16 +421,38 @@ export function useWebRtcMessaging({
         return;
       }
       try {
-        setStatus("negotiating");
         const peerConnection = await ensurePeerConnection(signal.sessionId);
         const offerPayload = signal.payload as RTCSessionDescriptionInit | null;
         if (!offerPayload) {
           throw new Error("Offer payload missing.");
         }
 
+        const offerCollision =
+          makingOfferRef.current || peerConnection.signalingState !== "stable";
+
+        ignoreOfferRef.current = !isPolite && offerCollision;
+        if (ignoreOfferRef.current) {
+          console.warn(
+            "Ignoring offer due to collision (impolite peer).",
+            peerConnection.signalingState,
+          );
+          return;
+        }
+
+        const needsRollback =
+          peerConnection.signalingState === "have-local-offer" ||
+          peerConnection.signalingState === "have-local-pranswer";
+
+        if (offerCollision && needsRollback) {
+          const rollbackDescription: RTCSessionDescriptionInit = { type: "rollback" };
+          await peerConnection.setLocalDescription(rollbackDescription);
+        }
+
+        setStatus("negotiating");
         await peerConnection.setRemoteDescription(offerPayload);
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
+        ignoreOfferRef.current = false;
 
         await sendSignalEnvelope(signal.sessionId, "answer", JSON.parse(JSON.stringify(answer)));
       } catch (offerError) {
@@ -426,9 +461,10 @@ export function useWebRtcMessaging({
           offerError instanceof Error ? offerError.message : "Offer failed.",
         );
         setStatus("error");
+        ignoreOfferRef.current = false;
       }
     },
-    [ensurePeerConnection, sendSignalEnvelope],
+    [ensurePeerConnection, isPolite, sendSignalEnvelope],
   );
 
   const processAnswer = useCallback(async (signal: WebRtcSignal) => {
@@ -436,11 +472,13 @@ export function useWebRtcMessaging({
       if (!pcRef.current || !signal.payload) {
         return;
       }
-      await pcRef.current.setRemoteDescription(
-        signal.payload as RTCSessionDescriptionInit,
-      );
+      const answerPayload = signal.payload as RTCSessionDescriptionInit;
+      settingRemoteAnswerRef.current = true;
+      await pcRef.current.setRemoteDescription(answerPayload);
+      settingRemoteAnswerRef.current = false;
       setStatus("negotiating");
     } catch (answerError) {
+      settingRemoteAnswerRef.current = false;
       console.error("Failed to process answer", answerError);
       setError(
         answerError instanceof Error ? answerError.message : "Answer failed.",
@@ -471,6 +509,20 @@ export function useWebRtcMessaging({
     async (signal: WebRtcSignal) => {
       if (signal.senderId === normalizedSelfId) {
         return;
+      }
+
+      if (signal.id) {
+        if (processedSignalIdsRef.current.has(signal.id)) {
+          return;
+        }
+        processedSignalIdsRef.current.add(signal.id);
+        if (processedSignalIdsRef.current.size > 512) {
+          const iterator = processedSignalIdsRef.current.values();
+          const oldest = iterator.next().value;
+          if (oldest && oldest !== signal.id) {
+            processedSignalIdsRef.current.delete(oldest);
+          }
+        }
       }
 
       switch (signal.type) {
@@ -519,6 +571,7 @@ export function useWebRtcMessaging({
 
   useEffect(() => {
     backlogDrainedRef.current = false;
+    processedSignalIdsRef.current.clear();
   }, [normalizedSelfId, normalizedPeerId]);
 
   useEffect(() => {
@@ -719,6 +772,7 @@ export function useWebRtcMessaging({
       setupDataChannel(dataChannel);
 
       setStatus("negotiating");
+      makingOfferRef.current = true;
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
@@ -737,6 +791,7 @@ export function useWebRtcMessaging({
       );
       setStatus("error");
     } finally {
+      makingOfferRef.current = false;
       startInFlightRef.current = false;
     }
   }, [conversationId, ensurePeerConnection, sendSignalEnvelope, setupDataChannel]);

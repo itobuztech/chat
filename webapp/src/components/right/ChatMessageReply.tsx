@@ -1,4 +1,4 @@
-import useWebRtcMessaging, { WebRtcMessage } from '@/hooks/useWebRtcMessaging'
+import { useWebRTCContext } from '@/components/context/WebRTCContext'
 import { ChatMessage, sendMessage } from '@/lib/messagesApi'
 import { X, Loader2, Send } from 'lucide-react'
 import React, { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from 'react'
@@ -6,6 +6,7 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/textarea'
 import { formatConversationPreview } from '../uifunctions/formatConversationPreview'
 import useUser from '@/hooks/useUser'
+import type { WebRtcMessage } from '@/hooks/useWebRtcMessaging'
 
 function ChatMessageReply({
   replyingTo,
@@ -29,14 +30,7 @@ function ChatMessageReply({
   const isMessageEmpty = messageInput.trim().length === 0
   const canSendMessage = conversationReady && !isSending && !isMessageEmpty
 
-  const {
-      sendMessage: sendViaRtc,
-      sendTyping,
-  } = useWebRtcMessaging({
-    selfId: selfId,
-    peerId: peerId,
-    enabled: conversationReady
-  })
+  const { sendMessage: sendViaRtc, sendTyping } = useWebRTCContext()
 
   const handleMessageChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
@@ -187,26 +181,28 @@ function ChatMessageReply({
         </div>
       )}
 
-      <Textarea
-        name="message"
-        placeholder="Type a message…"
-        rows={3}
-        value={messageInput}
-        onChange={handleMessageChange}
-        onBlur={handleInputBlur}
-        disabled={!conversationReady}
-      />
-      <div className="flex justify-end gap-2">
-        <Button type="submit" disabled={!canSendMessage}>
-          {isSending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <>
-              <Send className="mr-2 h-4 w-4" />
-              Send
-            </>
-          )}
-        </Button>
+      <div className="flex gap-4">
+        <Textarea
+          name="message"
+          placeholder="Type a message…"
+          rows={1}
+          value={messageInput}
+          onChange={handleMessageChange}
+          onBlur={handleInputBlur}
+          disabled={!conversationReady}
+        />
+        <div className="flex justify-end gap-2">
+          <Button type="submit" disabled={!canSendMessage}>
+            {isSending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <Send className="mr-2 h-4 w-4" />
+                Send
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     </form>
   )

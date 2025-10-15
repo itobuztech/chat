@@ -4,9 +4,9 @@ import { Button } from '../ui/button'
 import { ScrollArea } from '../ui/scroll-area'
 import { ConversationSummary, fetchConversations, PresenceStatus } from '@/lib/messagesApi'
 import useUser from '@/hooks/useUser'
-import useWebRtcMessaging from '@/hooks/useWebRtcMessaging'
 import { formatConversationPreview } from '../uifunctions/formatConversationPreview'
 import { Badge } from "@/components/ui/badge"
+import { useWebRTCContext } from '@/components/context/WebRTCContext'
 // import {
 //   type ChatMessage,
 //   type ConversationSummary,
@@ -22,6 +22,7 @@ function Conversations() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [isConversationsLoading, setIsConversationsLoading] = useState(false)
   const [conversationsError, setConversationsError] = useState<string | null>(null)
+  const { subscribeToPresence } = useWebRTCContext()
 
   const loadConversations = useCallback(async () => {
     if (!selfId) {
@@ -65,12 +66,15 @@ function Conversations() {
     [],
   )
 
-  useWebRtcMessaging({
-    selfId: selfId,
-    peerId: peerId,
-    enabled: !!selfId && !!peerId,
-    onPresence: handlePresenceUpdate,
-  });
+  useEffect(() => {
+    if (!selfId) {
+      return
+    }
+    const unsubscribe = subscribeToPresence(handlePresenceUpdate)
+    return () => {
+      unsubscribe()
+    }
+  }, [handlePresenceUpdate, selfId, subscribeToPresence])
 
   const formatConversationTime = useCallback((iso: string): string => {
       const date = new Date(iso)

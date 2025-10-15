@@ -6,7 +6,8 @@ import useUser from '@/hooks/useUser';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChatMessage, fetchConversation } from '@/lib/messagesApi';
 import { dedupeAndSort } from '@/lib/dedupeAndSort';
-import useWebRtcMessaging, { WebRtcMessage } from '@/hooks/useWebRtcMessaging';
+import { useWebRTCContext } from '@/components/context/WebRTCContext';
+import type { WebRtcMessage } from '@/hooks/useWebRtcMessaging';
 import ChatMessageReply from './ChatMessageReply';
 import { MessageReactions } from '../left/MessageReactions';
 
@@ -17,6 +18,8 @@ function Conversation() {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
   const [peerTyping, setPeerTyping] = useState(false)
   const peerTypingTimeoutRef = useRef<number | null>(null)
+
+  const { subscribeToMessages, subscribeToTyping } = useWebRTCContext();
 
   const sortedMessages = useMemo(
     () =>
@@ -91,6 +94,10 @@ function Conversation() {
 
   const appendIncomingMessage = useCallback(
     (incoming: WebRtcMessage) => {
+      if (incoming.senderId !== selfId && incoming.senderId !== peerId) {
+        return
+      }
+
       const chatMessage: ChatMessage = {
         id: incoming.id,
         conversationId: incoming.conversationId,
@@ -108,21 +115,27 @@ function Conversation() {
       handlePeerTyping(false)
       // void loadConversations() // ToDO: Do we need this?
     },
-    [handlePeerTyping],
+    [handlePeerTyping, peerId, selfId],
   )
 
-  useWebRtcMessaging({
-    selfId,
-    peerId,
-    enabled: conversationReady,
-    onMessage: appendIncomingMessage,
-    onTyping: handlePeerTyping,
-  })
+  useEffect(() => {
+    if (!conversationReady) {
+      return
+    }
+
+    const unsubscribeMessage = subscribeToMessages(appendIncomingMessage)
+    const unsubscribeTyping = subscribeToTyping(handlePeerTyping)
+
+    return () => {
+      unsubscribeMessage()
+      unsubscribeTyping()
+    }
+  }, [appendIncomingMessage, conversationReady, handlePeerTyping, subscribeToMessages, subscribeToTyping])
 
   return (
     <>
-      <div className="relative flex-1 overflow-hidden rounded-2xl border border-border/60 bg-muted/20">
-        <ScrollArea className="absolute inset-0 p-4">
+      <div className="relative flex-1 overflow-hidden">
+        <ScrollArea className="absolute inset-0">
           <div className="flex flex-col gap-4">
             {!selfId || !peerId ? (
               <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">

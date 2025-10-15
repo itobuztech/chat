@@ -1,14 +1,15 @@
-import useUser from '@/hooks/useUser';
-import { PresenceStatus, fetchConversation } from '@/lib/messagesApi';
-import { createContext, useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from "react"
 
-function Visibility({ children }: { children: React.ReactNode }) {
-  const {selfId, conversationReady} = useUser();
+import { type PresenceStatus } from "@/lib/messagesApi"
+import { useWebRTCContext } from "./WebRTCContext"
 
-  const previousSocketStatusRef = useRef<string>("disconnected")
+export function VisibilityProvider({ children }: { children: ReactNode }) {
+  const { sendPresence, socketStatus, conversationReady, selfId } = useWebRTCContext()
+  const previousSocketStatusRef = useRef(socketStatus)
 
   useEffect(() => {
     if (
+      !conversationReady ||
       !selfId ||
       typeof document === "undefined" ||
       typeof window === "undefined"
@@ -42,47 +43,27 @@ function Visibility({ children }: { children: React.ReactNode }) {
       window.removeEventListener("pointerdown", markActive)
       window.removeEventListener("keydown", markActive)
     }
-  }, [conversationReady, normalizedSelfId, sendPresence])
+  }, [conversationReady, selfId, sendPresence])
 
   useEffect(() => {
-    if (!conversationReady || socketStatus !== "connected") {
+    if (!conversationReady) {
       previousSocketStatusRef.current = socketStatus
       return
     }
 
-    if (previousSocketStatusRef.current === "connected") {
-      return
+    if (
+      socketStatus === "connected" &&
+      previousSocketStatusRef.current !== "connected" &&
+      typeof document !== "undefined"
+    ) {
+      const nextStatus: PresenceStatus = document.hidden ? "away" : "online"
+      sendPresence(nextStatus)
     }
 
     previousSocketStatusRef.current = socketStatus
-    let cancelled = false
+  }, [conversationReady, sendPresence, socketStatus])
 
-    const refreshMessages = async () => {
-      try {
-        const conversation = await fetchConversation(
-          normalizedSelfId,
-          normalizedPeerId,
-        )
-        if (!cancelled) {
-          setMessages(conversation)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          // const message =
-          //   err instanceof Error ? err.message : "Failed to refresh messages."
-          // setError(message)
-        }
-      }
-    }
-
-    void refreshMessages()
-
-    return () => {
-      cancelled = true
-    }
-  }, [conversationReady, normalizedPeerId, normalizedSelfId, socketStatus])
-
-  return children
+  return <>{children}</>
 }
 
-export const VisibilityContext = createContext(Visibility);
+export default VisibilityProvider
