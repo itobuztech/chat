@@ -8,6 +8,7 @@ import { ChatMessage, fetchConversation } from '@/lib/messagesApi';
 import { dedupeAndSort } from '@/lib/dedupeAndSort';
 import useWebRtcMessaging, { WebRtcMessage } from '@/hooks/useWebRtcMessaging';
 import ChatMessageReply from './ChatMessageReply';
+import { MessageReactions } from '../left/MessageReactions';
 
 function Conversation() {
   const [isLoading, setIsLoading] = useState(false)
@@ -192,6 +193,10 @@ function Conversation() {
                         <MessageSquareReply className="mr-1 h-3.5 w-3.5" />
                         Reply
                       </Button>
+
+                      <MessageReactions message={message} currentUserId={selfId} onReactionUpdate={function (updatedMessage: ChatMessage): void {
+                        throw new Error('Function not implemented.');
+                      } }/>
                     </div>
                   </div>
                 )

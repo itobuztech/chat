@@ -1,9 +1,9 @@
 import { useState } from "react"
 
-import { addReaction, removeReaction, type ChatMessage } from "../lib/messagesApi"
-import { Button } from "./ui/button"
-import { Badge } from "./ui/badge"
-import { cn } from "../lib/utils"
+import { addReaction, removeReaction, type ChatMessage } from "../../lib/messagesApi"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
 
 interface MessageReactionsProps {
   message: ChatMessage;
