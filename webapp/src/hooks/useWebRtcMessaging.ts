@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE_URL } from "../lib/messagesApi.js";
 import type { PresenceStatus } from "../lib/messagesApi.js";
+import type { GroupChatMessage } from "../lib/groupMessagesApi.js";
 import {
   fetchIceConfig,
   fetchPendingSignals,
@@ -72,6 +73,8 @@ interface UseWebRtcMessagingOptions {
   peerId: string;
   enabled: boolean;
   onMessage?: (message: WebRtcMessage) => void;
+  onGroupMessage?: (message: GroupChatMessage) => void;
+  onGroupMessageUpdate?: (message: GroupChatMessage) => void;
   onTyping?: (typing: boolean) => void;
   onPresence?: (peerId: string, status: PresenceStatus) => void;
 }
@@ -127,6 +130,8 @@ export function useWebRtcMessaging({
   peerId,
   enabled,
   onMessage,
+  onGroupMessage,
+  onGroupMessageUpdate,
   onTyping,
   onPresence,
 }: UseWebRtcMessagingOptions): UseWebRtcMessagingResult {
@@ -765,6 +770,16 @@ export function useWebRtcMessaging({
                 onMessage && onMessage(data.payload as WebRtcMessage);
               }
               break;
+            case "group:message:new":
+              if (data.payload && typeof data.payload.id === "string") {
+                onGroupMessage?.(data.payload as GroupChatMessage);
+              }
+              break;
+            case "group:message:update":
+              if (data.payload && typeof data.payload.id === "string") {
+                onGroupMessageUpdate?.(data.payload as GroupChatMessage);
+              }
+              break;
             case "presence:update": {
               const payload = data.payload as Partial<PresenceUpdatePayload>;
               if (payload && typeof payload.peerId === "string") {
@@ -860,11 +875,19 @@ export function useWebRtcMessaging({
     handleIncomingSignal,
     handleTypingPayload,
     normalizedPeerId,
-    normalizedSelfId,
-    onMessage,
+   normalizedSelfId,
+   onMessage,
+    onGroupMessage,
+    onGroupMessageUpdate,
     onPresence,
     wsUrl,
   ]);
+
+  useEffect(() => {
+    if (!normalizedPeerId) {
+      void cleanupConnection();
+    }
+  }, [cleanupConnection, normalizedPeerId]);
 
   const startConnection = useCallback(async () => {
     if (startInFlightRef.current) {

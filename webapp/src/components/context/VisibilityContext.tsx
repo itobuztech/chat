@@ -4,12 +4,11 @@ import { type PresenceStatus } from "@/lib/messagesApi"
 import { useWebRTCContext } from "./WebRTCContext"
 
 export function VisibilityProvider({ children }: { children: ReactNode }) {
-  const { sendPresence, socketStatus, conversationReady, selfId } = useWebRTCContext()
+  const { sendPresence, socketStatus, selfId } = useWebRTCContext()
   const previousSocketStatusRef = useRef(socketStatus)
 
   useEffect(() => {
     if (
-      !conversationReady ||
       !selfId ||
       typeof document === "undefined" ||
       typeof window === "undefined"
@@ -43,10 +42,10 @@ export function VisibilityProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("pointerdown", markActive)
       window.removeEventListener("keydown", markActive)
     }
-  }, [conversationReady, selfId, sendPresence])
+  }, [selfId, sendPresence])
 
   useEffect(() => {
-    if (!conversationReady) {
+    if (!selfId) {
       previousSocketStatusRef.current = socketStatus
       return
     }
@@ -61,7 +60,7 @@ export function VisibilityProvider({ children }: { children: ReactNode }) {
     }
 
     previousSocketStatusRef.current = socketStatus
-  }, [conversationReady, sendPresence, socketStatus])
+  }, [selfId, sendPresence, socketStatus])
 
   return <>{children}</>
 }

@@ -89,6 +89,68 @@ The Express server exposes lightweight REST APIs that act as the WebRTC signalin
 Messages are persisted in MongoDB so offline peers can retrieve them when they come back. A WebSocket push delivers new messages instantly when recipients are connected.
 Each message keeps track of `sent`, `delivered`, and `read` timestamps—updates flow over WebRTC when possible, falling back to the WebSocket channel and stored in MongoDB.
 
+## Group Chat API
+Group conversations persist to a dedicated `groups` collection. The first iteration exposes lifecycle endpoints that the frontend can call as the UI lands:
+
+- `POST /api/groups`  
+  Create a group. Body:
+  ```json
+  {
+    "name": "Weekend Riders",
+    "creatorId": "alice",
+    "memberIds": ["bob", "charlie"], // optional, creator becomes owner automatically
+    "description": "Route planning and shared photos"
+  }
+  ```
+  Responds with the stored group and the membership roster.
+
+- `GET /api/groups?memberId=alice`  
+  List groups, optionally filtered to those that include a specific user id.
+
+- `GET /api/groups/<groupId>`  
+  Fetch details and membership for a single group.
+
+- `POST /api/groups/<groupId>/members`  
+  Add one or more members. Body:
+  ```json
+  {
+    "requesterId": "alice",
+    "userIds": ["dave", "erin"]
+  }
+  ```
+  Only owners and admins may add new members.
+
+- `DELETE /api/groups/<groupId>/members`  
+  Remove members. Body:
+  ```json
+  {
+    "requesterId": "alice",
+    "userIds": ["bob"]
+  }
+  ```
+  Owners can remove any non-owner; admins can remove members (not other admins or the owner).
+
+- `POST /api/group-messages`  
+  Persist a new message in the group timeline and fan it out over WebRTC/WebSocket. Body:
+  ```json
+  {
+    "groupId": "<groupId>",
+    "senderId": "alice",
+    "content": "Who's up for a Sunday ride?",
+    "replyToId": "<optional message id>"
+  }
+  ```
+  The response includes `readBy` metadata keyed by user id.
+
+- `GET /api/group-messages/<groupId>?limit=50&before=<messageId>`  
+  Paginate through a group's history, returning messages sorted oldest → newest.
+
+- `POST /api/group-messages/<messageId>/read`  
+  Record that a participant has read the message; broadcasts the updated `readBy` map.
+
+- `POST|DELETE /api/group-messages/<messageId>/reactions`  
+  Add or remove emoji reactions. Payload: `{ "emoji": "👍", "userId": "bob" }`.
+
 Environment variables:
 - `MONGO_URI` (default `mongodb://localhost:27017`) – connection string.
 - `MONGO_DB` (default `p2p-chat`) – database name.

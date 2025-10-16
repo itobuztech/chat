@@ -8,12 +8,54 @@ const client = new MongoClient(mongoUri);
 let dbPromise: Promise<Db> | null = null;
 let messageIndexesInitialized = false;
 let signalIndexesInitialized = false;
+let groupIndexesInitialized = false;
+let groupMessageIndexesInitialized = false;
 
 export interface MessageDocument {
   _id?: ObjectId;
   conversationId: string;
   senderId: string;
   recipientId: string;
+  content: string;
+  createdAt: Date;
+  delivered: boolean;
+  read: boolean;
+  replyTo?: {
+    messageId: ObjectId;
+    senderId: string;
+    content: string;
+    createdAt: Date;
+  };
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
+}
+
+export type GroupMemberRole = "owner" | "admin" | "member";
+
+export interface GroupMember {
+  userId: string;
+  role: GroupMemberRole;
+  joinedAt: Date;
+}
+
+export interface GroupDocument {
+  _id?: ObjectId;
+  name: string;
+  description?: string;
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+  members: GroupMember[];
+}
+
+export interface GroupMessageDocument {
+  _id?: ObjectId;
+  groupId: string;
+  senderId: string;
   content: string;
   createdAt: Date;
   replyTo?: {
@@ -28,6 +70,7 @@ export interface MessageDocument {
       count: number;
     };
   };
+  readBy: Record<string, Date>;
 }
 
 export type WebRTCSignalType = "offer" | "answer" | "candidate" | "bye";
@@ -87,6 +130,39 @@ export async function getSignalsCollection(): Promise<
   return collection;
 }
 
+export async function getGroupsCollection(): Promise<
+  Collection<GroupDocument>
+> {
+  const db = await getDatabase();
+  const collection = db.collection<GroupDocument>("groups");
+
+  if (!groupIndexesInitialized) {
+    await Promise.all([
+      collection.createIndex({ "members.userId": 1 }),
+      collection.createIndex({ createdBy: 1, createdAt: -1 }),
+    ]);
+    groupIndexesInitialized = true;
+  }
+
+  return collection;
+}
+
+export async function getGroupMessagesCollection(): Promise<
+  Collection<GroupMessageDocument>
+> {
+  const db = await getDatabase();
+  const collection = db.collection<GroupMessageDocument>("group_messages");
+
+  if (!groupMessageIndexesInitialized) {
+    await Promise.all([
+      collection.createIndex({ groupId: 1, createdAt: -1 }),
+    ]);
+    groupMessageIndexesInitialized = true;
+  }
+
+  return collection;
+}
+
 export async function connectToDatabase(): Promise<void> {
   await getDatabase();
 }
@@ -96,4 +172,6 @@ export async function closeDatabase(): Promise<void> {
   dbPromise = null;
   messageIndexesInitialized = false;
   signalIndexesInitialized = false;
+  groupIndexesInitialized = false;
+  groupMessageIndexesInitialized = false;
 }

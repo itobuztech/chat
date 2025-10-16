@@ -1,25 +1,34 @@
-import { cn } from '@/lib/utils'
-import { Loader2, MessageSquareReply } from 'lucide-react'
-import { Button } from '../ui/button'
-import { ScrollArea } from '../ui/scroll-area'
-import useUser from '@/hooks/useUser';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChatMessage, fetchConversation } from '@/lib/messagesApi';
-import { dedupeAndSort } from '@/lib/dedupeAndSort';
-import { useWebRTCContext } from '@/components/context/WebRTCContext';
-import type { WebRtcMessage } from '@/hooks/useWebRtcMessaging';
-import ChatMessageReply from './ChatMessageReply';
-import { MessageReactions } from '../left/MessageReactions';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-function Conversation() {
+import { useWebRTCContext } from "@/components/context/WebRTCContext"
+import type { WebRtcMessage } from "@/hooks/useWebRtcMessaging"
+import useUser from "@/hooks/useUser"
+import { dedupeAndSort } from "@/lib/dedupeAndSort"
+import { ChatMessage, fetchConversation } from "@/lib/messagesApi"
+import { cn } from "@/lib/utils"
+import { Button } from "../ui/button"
+import { ScrollArea } from "../ui/scroll-area"
+import ChatMessageReply from "./ChatMessageReply"
+import GroupConversation from "./GroupConversation"
+import { MessageReactions } from "../left/MessageReactions"
+import { Loader2, MessageSquareReply } from "lucide-react"
+
+function Conversation(): JSX.Element {
   const [isLoading, setIsLoading] = useState(false)
-  const { selfId, peerId, conversationReady } = useUser();
+  const {
+    selfId,
+    peerId,
+    activePeerId,
+    activeGroupId,
+    activeConversation,
+    conversationReady,
+  } = useUser()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null)
   const [peerTyping, setPeerTyping] = useState(false)
   const peerTypingTimeoutRef = useRef<number | null>(null)
 
-  const { subscribeToMessages, subscribeToTyping } = useWebRTCContext();
+  const { subscribeToMessages, subscribeToTyping } = useWebRTCContext()
 
   const sortedMessages = useMemo(
     () =>
@@ -29,27 +38,17 @@ function Conversation() {
     [messages],
   )
 
-  const handleStartReply = useCallback((message: ChatMessage) => {
-    setReplyingTo(message)
-  }, [])
-
-  const handleReactionUpdate = useCallback((updatedMessage: ChatMessage) => {
-    setMessages((prev) => {
-      const next = prev.map((message) =>
-        message.id === updatedMessage.id ? updatedMessage : message,
-      )
-      return dedupeAndSort(next)
-    })
-  }, [])
-
   useEffect(() => {
     if (typeof window === "undefined") {
       return
     }
 
-    if (!conversationReady) {
+    if (
+      !conversationReady ||
+      activeConversation.kind !== "direct" ||
+      activePeerId.trim().length === 0
+    ) {
       setMessages([])
-      // setStatusMessage(null)
       setIsLoading(false)
       setReplyingTo(null)
       return
@@ -60,18 +59,13 @@ function Conversation() {
 
     const loadHistory = async () => {
       try {
-        const conversation = await fetchConversation(
-          selfId,
-          peerId,
-        )
+        const history = await fetchConversation(selfId, activePeerId)
         if (!cancelled) {
-          setMessages(conversation)
+          setMessages(history)
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) {
-          // const message =
-          //   err instanceof Error ? err.message : "Failed to fetch messages."
-          // setError(message) // Replace with toast if available
+          // TODO: expose toast for errors
         }
       } finally {
         if (!cancelled) {
@@ -85,7 +79,20 @@ function Conversation() {
     return () => {
       cancelled = true
     }
-  }, [conversationReady, selfId, peerId])
+  }, [activeConversation, activePeerId, conversationReady, selfId])
+
+  const handleStartReply = useCallback((message: ChatMessage) => {
+    setReplyingTo(message)
+  }, [])
+
+  const handleReactionUpdate = useCallback((updatedMessage: ChatMessage) => {
+    setMessages((prev) => {
+      const next = prev.map((message) =>
+        message.id === updatedMessage.id ? updatedMessage : message,
+      )
+      return dedupeAndSort(next)
+    })
+  }, [])
 
   const handlePeerTyping = useCallback((typing: boolean) => {
     setPeerTyping(typing)
@@ -103,7 +110,10 @@ function Conversation() {
 
   const appendIncomingMessage = useCallback(
     (incoming: WebRtcMessage) => {
-      if (incoming.senderId !== selfId && incoming.senderId !== peerId) {
+      if (
+        activeConversation.kind !== "direct" ||
+        (incoming.senderId !== selfId && incoming.senderId !== activePeerId)
+      ) {
         return
       }
 
@@ -123,13 +133,16 @@ function Conversation() {
       }
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]))
       handlePeerTyping(false)
-      // void loadConversations() // ToDO: Do we need this?
     },
-    [handlePeerTyping, peerId, selfId],
+    [activeConversation.kind, activePeerId, handlePeerTyping, selfId],
   )
 
   useEffect(() => {
-    if (!conversationReady) {
+    if (
+      !conversationReady ||
+      activeConversation.kind !== "direct" ||
+      activePeerId.trim().length === 0
+    ) {
       return
     }
 
@@ -140,14 +153,34 @@ function Conversation() {
       unsubscribeMessage()
       unsubscribeTyping()
     }
-  }, [appendIncomingMessage, conversationReady, handlePeerTyping, subscribeToMessages, subscribeToTyping])
+  }, [
+    activeConversation.kind,
+    activePeerId,
+    appendIncomingMessage,
+    conversationReady,
+    handlePeerTyping,
+    subscribeToMessages,
+    subscribeToTyping,
+  ])
+
+  if (activeConversation.kind === "group") {
+    if (!activeGroupId) {
+      return (
+        <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+          Select a group to view its details.
+        </div>
+      )
+    }
+
+    return <GroupConversation groupId={activeGroupId} />
+  }
 
   return (
     <>
       <div className="relative flex-1 overflow-hidden">
         <ScrollArea className="absolute inset-0">
           <div className="flex flex-col gap-4">
-            {!selfId || !peerId ? (
+            {!selfId || !activePeerId ? (
               <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
                 Add your ID and a peer to begin.
               </div>
@@ -229,12 +262,13 @@ function Conversation() {
             )}
             {peerTyping && (
               <div className="text-sm italic text-muted-foreground">
-                {peerId || "Peer"} is typing…
+                {(activePeerId || peerId || "Peer")} is typing…
               </div>
             )}
           </div>
         </ScrollArea>
       </div>
+
       <ChatMessageReply
         replyingTo={replyingTo}
         handleCancelReply={() => setReplyingTo(null)}

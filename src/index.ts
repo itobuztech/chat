@@ -12,6 +12,8 @@ import express, {
 import { closeDatabase, connectToDatabase } from "./lib/mongoClient";
 import { initializeWebSocketServer } from "./realtime/websocketHub";
 import messagesRouter from "./routes/messages";
+import groupsRouter from "./routes/groups";
+import groupMessagesRouter from "./routes/groupMessages";
 import webrtcRouter from "./routes/webrtc";
 
 const app = express();
@@ -37,6 +39,8 @@ app.get("/", (_req: Request, res: Response) => {
 
 app.use("/api/messages", messagesRouter);
 app.use("/api/webrtc", webrtcRouter);
+app.use("/api/groups", groupsRouter);
+app.use("/api/group-messages", groupMessagesRouter);
 
 const errorHandler: ErrorRequestHandler = (err, _req, res) => {
   console.error(err);

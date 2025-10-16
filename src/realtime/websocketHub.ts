@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 
 import type { MessageDocument } from "../lib/mongoClient";
 import { saveSignal } from "../services/signalingService";
-import type { ApiMessage, ApiSignal } from "../types/api";
+import type { ApiGroupMessage, ApiMessage, ApiSignal } from "../types/api";
 import { toApiMessage } from "../utils/formatters";
 
 type ClientRegistry = Map<string, Set<WebSocket>>;
@@ -20,6 +20,11 @@ interface SignalOutbound {
 interface MessageOutbound {
   type: "message:new" | "message:status";
   payload: ApiMessage;
+}
+
+interface GroupMessageOutbound {
+  type: "group:message:new" | "group:message:update";
+  payload: ApiGroupMessage;
 }
 
 interface TypingPayload {
@@ -59,6 +64,7 @@ interface ErrorOutbound {
 type OutboundEvent =
   | SignalOutbound
   | MessageOutbound
+  | GroupMessageOutbound
   | TypingOutbound
   | PresenceUpdateOutbound
   | PresenceSyncOutbound
@@ -242,6 +248,20 @@ export function broadcastSignal(signal: ApiSignal, excludePeerId?: string): void
   }
 }
 
+export function broadcastGroupMessage(
+  message: ApiGroupMessage,
+  memberIds: string[],
+): void {
+  emitToPeers(memberIds, { type: "group:message:new", payload: message });
+}
+
+export function broadcastGroupMessageUpdate(
+  message: ApiGroupMessage,
+  memberIds: string[],
+): void {
+  emitToPeers(memberIds, { type: "group:message:update", payload: message });
+}
+
 export function broadcastTyping(payload: TypingPayload): void {
   emitToPeer(payload.recipientId, { type: "typing", payload });
 }
@@ -283,6 +303,12 @@ function emitToPeer(peerId: string, message: OutboundEvent) {
   }
   for (const socket of sockets.values()) {
     send(socket, message);
+  }
+}
+
+function emitToPeers(peerIds: Iterable<string>, message: OutboundEvent) {
+  for (const peerId of peerIds) {
+    emitToPeer(peerId, message);
   }
 }
 

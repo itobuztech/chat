@@ -28,3 +28,42 @@ export interface ApiSignal {
   payload: Record<string, unknown> | null;
   createdAt: string;
 }
+
+export type ApiGroupMemberRole = "owner" | "admin" | "member";
+
+export interface ApiGroupMember {
+  userId: string;
+  role: ApiGroupMemberRole;
+  joinedAt: string;
+}
+
+export interface ApiGroup {
+  id: string;
+  name: string;
+  description?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  members: ApiGroupMember[];
+}
+
+export interface ApiGroupMessage {
+  id: string;
+  groupId: string;
+  senderId: string;
+  content: string;
+  createdAt: string;
+  replyTo?: {
+    id: string;
+    senderId: string;
+    content: string;
+    createdAt: string;
+  };
+  reactions?: {
+    [emoji: string]: {
+      userIds: string[];
+      count: number;
+    };
+  };
+  readBy: Record<string, string>;
+}

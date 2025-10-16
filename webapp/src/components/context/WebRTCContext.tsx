@@ -10,18 +10,22 @@ import {
 import useUser from "@/hooks/useUser"
 import useWebRtcMessaging, { type WebRtcMessage } from "@/hooks/useWebRtcMessaging"
 import { type PresenceStatus } from "@/lib/messagesApi"
+import { type GroupChatMessage } from "@/lib/groupMessagesApi"
 
 type MessageListener = (message: WebRtcMessage) => void
 type TypingListener = (typing: boolean) => void
 type PresenceListener = (peerId: string, status: PresenceStatus) => void
+type GroupMessageListener = (message: GroupChatMessage) => void
 
 type WebRtcHookResult = ReturnType<typeof useWebRtcMessaging>
 
 interface WebRtcContextValue extends WebRtcHookResult {
   selfId: string
   peerId: string
+  activeConversation: ReturnType<typeof useUser>["activeConversation"]
   conversationReady: boolean
   subscribeToMessages: (listener: MessageListener) => () => void
+  subscribeToGroupMessages: (listener: GroupMessageListener) => () => void
   subscribeToTyping: (listener: TypingListener) => () => void
   subscribeToPresence: (listener: PresenceListener) => () => void
 }
@@ -29,15 +33,22 @@ interface WebRtcContextValue extends WebRtcHookResult {
 const WebRTCContext = createContext<WebRtcContextValue | undefined>(undefined)
 
 export function WebRTCProvider({ children }: { children: ReactNode }) {
-  const { selfId, peerId, conversationReady } = useUser()
+  const { selfId, activePeerId, activeConversation, conversationReady } = useUser()
 
   const messageListenersRef = useRef(new Set<MessageListener>())
+  const groupMessageListenersRef = useRef(new Set<GroupMessageListener>())
   const typingListenersRef = useRef(new Set<TypingListener>())
   const presenceListenersRef = useRef(new Set<PresenceListener>())
   const presenceStateRef = useRef(new Map<string, PresenceStatus>())
 
   const notifyMessage = useCallback((message: WebRtcMessage) => {
     for (const listener of messageListenersRef.current) {
+      listener(message)
+    }
+  }, [])
+
+  const notifyGroupMessage = useCallback((message: GroupChatMessage) => {
+    for (const listener of groupMessageListenersRef.current) {
       listener(message)
     }
   }, [])
@@ -58,11 +69,15 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const realtimeReady = selfId.trim().length > 0
+
   const rtc = useWebRtcMessaging({
     selfId,
-    peerId,
-    enabled: conversationReady,
+    peerId: activePeerId,
+    enabled: realtimeReady,
     onMessage: notifyMessage,
+    onGroupMessage: notifyGroupMessage,
+    onGroupMessageUpdate: notifyGroupMessage,
     onTyping: notifyTyping,
     onPresence: notifyPresence,
   })
@@ -78,6 +93,13 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
     typingListenersRef.current.add(listener)
     return () => {
       typingListenersRef.current.delete(listener)
+    }
+  }, [])
+
+  const subscribeToGroupMessages = useCallback((listener: GroupMessageListener) => {
+    groupMessageListenersRef.current.add(listener)
+    return () => {
+      groupMessageListenersRef.current.delete(listener)
     }
   }, [])
 
@@ -113,9 +135,11 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       sendPresence,
       disconnect,
       selfId,
-      peerId,
+      peerId: activePeerId,
+      activeConversation,
       conversationReady,
       subscribeToMessages,
+      subscribeToGroupMessages,
       subscribeToTyping,
       subscribeToPresence,
     }),
@@ -129,9 +153,11 @@ export function WebRTCProvider({ children }: { children: ReactNode }) {
       sendPresence,
       disconnect,
       selfId,
-      peerId,
+      activePeerId,
+      activeConversation,
       conversationReady,
       subscribeToMessages,
+      subscribeToGroupMessages,
       subscribeToTyping,
       subscribeToPresence,
     ],
