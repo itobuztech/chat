@@ -118,6 +118,7 @@ function Conversation() {
         deliveredAt: incoming.deliveredAt,
         read: incoming.read ?? false,
         readAt: incoming.readAt,
+        reactions: incoming.reactions,
         replyTo: incoming.replyTo,
       }
       setMessages((prev) => dedupeAndSort([...prev, chatMessage]))

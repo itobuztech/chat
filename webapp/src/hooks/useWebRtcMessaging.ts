@@ -92,6 +92,13 @@ interface IceBundle {
   expiresAt: number;
 }
 
+interface ConnectionHealth {
+  lastActivity: number;
+  iceGatheringRetries: number;
+  maxRetries: number;
+  lastIceRefresh: number;
+}
+
 function createConversationId(a: string, b: string): string {
   return [a.trim(), b.trim()].sort((left, right) => left.localeCompare(right)).join("#");
 }
@@ -164,6 +171,13 @@ export function useWebRtcMessaging({
   const ignoreOfferRef = useRef(false);
   const settingRemoteAnswerRef = useRef(false);
   const processedSignalIdsRef = useRef(new Set<string>());
+  const connectionHealthRef = useRef<ConnectionHealth>({
+    lastActivity: Date.now(),
+    iceGatheringRetries: 0,
+    maxRetries: 3,
+    lastIceRefresh: 0,
+  });
+  const iceRefreshTimerRef = useRef<number | null>(null);
 
   const resetConnectionRefs = useCallback(() => {
     if (dataChannelRef.current) {
@@ -197,13 +211,27 @@ export function useWebRtcMessaging({
     ignoreOfferRef.current = false;
     settingRemoteAnswerRef.current = false;
     processedSignalIdsRef.current.clear();
+    connectionHealthRef.current = {
+      lastActivity: Date.now(),
+      iceGatheringRetries: 0,
+      maxRetries: 3,
+      lastIceRefresh: 0,
+    };
+    if (iceRefreshTimerRef.current !== null) {
+      window.clearTimeout(iceRefreshTimerRef.current);
+      iceRefreshTimerRef.current = null;
+    }
     setDataChannelReady(false);
   }, [setDataChannelReady]);
 
-  const ensureIceConfig = useCallback(async (): Promise<IceBundle> => {
+  const ensureIceConfig = useCallback(async (forceRefresh = false): Promise<IceBundle> => {
     const now = Date.now();
     const cached = iceBundleRef.current;
-    if (cached && cached.expiresAt > now + 60_000) {
+    
+    // Force refresh if requested or if cache is expired/expiring soon (5 min buffer)
+    const needsRefresh = forceRefresh || !cached || cached.expiresAt <= now + 300_000;
+    
+    if (!needsRefresh) {
       return cached;
     }
 
@@ -221,9 +249,11 @@ export function useWebRtcMessaging({
             expiresAt: Date.now() + ttlMilliseconds,
           };
           iceBundleRef.current = bundle;
+          connectionHealthRef.current.lastIceRefresh = Date.now();
           setStatus((prev) =>
             prev === "fetching-ice" || prev === "idle" ? "waiting" : prev,
           );
+          console.log('ICE config refreshed, expires at:', new Date(bundle.expiresAt));
           return bundle;
         })
         .catch((iceError) => {
@@ -351,6 +381,7 @@ export function useWebRtcMessaging({
       pcRef.current = peerConnection;
 
       peerConnection.onicecandidate = async (event) => {
+        connectionHealthRef.current.lastActivity = Date.now();
         if (!event.candidate || !sessionIdRef.current) {
           return;
         }
@@ -365,16 +396,53 @@ export function useWebRtcMessaging({
         }
       };
 
+      peerConnection.onicegatheringstatechange = () => {
+        console.log('ICE gathering state:', peerConnection.iceGatheringState);
+        connectionHealthRef.current.lastActivity = Date.now();
+        
+        if (peerConnection.iceGatheringState === 'complete') {
+          connectionHealthRef.current.iceGatheringRetries = 0;
+        } else if (peerConnection.iceGatheringState === 'gathering') {
+          connectionHealthRef.current.iceGatheringRetries++;
+        }
+      };
+
       peerConnection.onconnectionstatechange = () => {
+        console.log('Connection state changed:', peerConnection.connectionState);
+        connectionHealthRef.current.lastActivity = Date.now();
+        
         switch (peerConnection.connectionState) {
           case "connected":
             setStatus("connected");
+            connectionHealthRef.current.iceGatheringRetries = 0;
             break;
           case "connecting":
             setStatus("negotiating");
             break;
           case "disconnected":
+            console.warn('WebRTC connection disconnected - attempting recovery');
+            // Don't immediately reset, try ICE restart first
+            if (connectionHealthRef.current.iceGatheringRetries < connectionHealthRef.current.maxRetries) {
+              setTimeout(async () => {
+                try {
+                  if (pcRef.current?.connectionState === 'disconnected') {
+                    console.log('Attempting ICE restart for disconnected connection');
+                    await ensureIceConfig(true); // Force refresh ICE config
+                    await pcRef.current?.restartIce();
+                  }
+                } catch (error) {
+                  console.error('ICE restart failed:', error);
+                  setStatus("disconnected");
+                  resetConnectionRefs();
+                }
+              }, 2000);
+            } else {
+              setStatus("disconnected");
+              resetConnectionRefs();
+            }
+            break;
           case "failed":
+            console.error('WebRTC connection failed');
             setStatus("disconnected");
             resetConnectionRefs();
             break;
@@ -472,14 +540,28 @@ export function useWebRtcMessaging({
       if (!pcRef.current || !signal.payload) {
         return;
       }
+      
+      // Check if we're in a valid state to receive an answer
+      if (pcRef.current.signalingState !== "have-local-offer") {
+        console.warn(`Received answer in invalid state: ${pcRef.current.signalingState}`);
+        return;
+      }
+      
       const answerPayload = signal.payload as RTCSessionDescriptionInit;
       settingRemoteAnswerRef.current = true;
+      connectionHealthRef.current.lastActivity = Date.now();
       await pcRef.current.setRemoteDescription(answerPayload);
       settingRemoteAnswerRef.current = false;
       setStatus("negotiating");
     } catch (answerError) {
       settingRemoteAnswerRef.current = false;
       console.error("Failed to process answer", answerError);
+      
+      // If answer processing fails due to state issues, try to recover
+      if (answerError instanceof Error && answerError.message?.includes('state')) {
+        console.log('Answer failed due to state mismatch - may need connection restart');
+      }
+      
       setError(
         answerError instanceof Error ? answerError.message : "Answer failed.",
       );
@@ -492,16 +574,43 @@ export function useWebRtcMessaging({
       if (!pcRef.current || !signal.payload) {
         return;
       }
+      
+      // Check if peer connection is in a valid state for ICE candidates
+      if (pcRef.current.remoteDescription === null) {
+        console.warn('Received ICE candidate before remote description - ignoring');
+        return;
+      }
+      
+      connectionHealthRef.current.lastActivity = Date.now();
       await pcRef.current.addIceCandidate(signal.payload as RTCIceCandidateInit);
     } catch (candidateError) {
       console.error("Failed to add ICE candidate", candidateError);
-      setError(
-        candidateError instanceof Error
-          ? candidateError.message
-          : "Failed to add ICE candidate.",
-      );
+      
+      // Handle "Unknown ufrag" errors - indicates stale TURN credentials
+      if (candidateError instanceof Error && candidateError.message?.includes('ufrag')) {
+        console.warn('ICE ufrag error detected - TURN credentials may be stale');
+        try {
+          console.log('Attempting to refresh ICE config due to ufrag error');
+          await ensureIceConfig(true); // Force refresh
+          
+          // If we have an active connection, restart ICE
+          if (pcRef.current?.connectionState === 'connected' || pcRef.current?.connectionState === 'connecting') {
+            console.log('Restarting ICE due to credential refresh');
+            await pcRef.current.restartIce();
+          }
+        } catch (refreshError) {
+          console.error('Failed to refresh ICE after ufrag error:', refreshError);
+          setError('TURN server credentials expired - connection may be unstable');
+        }
+      } else {
+        setError(
+          candidateError instanceof Error
+            ? candidateError.message
+            : "Failed to add ICE candidate.",
+        );
+      }
     }
-  }, []);
+  }, [ensureIceConfig]);
 
   
 
@@ -879,11 +988,50 @@ export function useWebRtcMessaging({
     status,
   ]);
 
+  // Add periodic ICE config refresh and connection health monitoring
+  useEffect(() => {
+    if (!enabled) return;
+    
+    const healthCheckInterval = setInterval(async () => {
+      const now = Date.now();
+      const cached = iceBundleRef.current;
+      
+      // Check if ICE config needs refresh (refresh 5 minutes before expiry)
+      if (cached && cached.expiresAt - now < 300_000) {
+        try {
+          console.log('Proactively refreshing ICE config before expiry');
+          await ensureIceConfig(true);
+          
+          // If we have an active connection, restart ICE to use new credentials
+          if (pcRef.current?.connectionState === 'connected') {
+            console.log('Restarting ICE with fresh credentials');
+            await pcRef.current.restartIce();
+          }
+        } catch (error) {
+          console.warn('Failed to proactively refresh ICE config:', error);
+        }
+      }
+      
+      // Check connection health - if no activity for 10 minutes and we're supposedly connected
+      const timeSinceActivity = now - connectionHealthRef.current.lastActivity;
+      if (timeSinceActivity > 600_000 && status === 'connected') {
+        console.warn('No WebRTC activity for 10+ minutes, connection may be stale');
+        // Could trigger a connection health check here
+      }
+    }, 60_000); // Check every minute
+    
+    return () => clearInterval(healthCheckInterval);
+  }, [enabled, ensureIceConfig, status]);
+
   useEffect(() => {
     return () => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (iceRefreshTimerRef.current !== null) {
+        window.clearTimeout(iceRefreshTimerRef.current);
+        iceRefreshTimerRef.current = null;
       }
       const socket = wsRef.current;
       if (socket) {
@@ -902,6 +1050,34 @@ export function useWebRtcMessaging({
     const envelope: ChannelEnvelope = { kind: "message", payload: message };
     channel.send(JSON.stringify(envelope));
   }, []);
+
+  const restartConnection = useCallback(async () => {
+    if (!sessionIdRef.current) return;
+    
+    try {
+      console.log('Restarting WebRTC connection due to persistent issues');
+      
+      // Send bye signal and clean up
+      await sendByeSignal();
+      resetConnectionRefs();
+      
+      // Clear processed signals cache to avoid stale state
+      processedSignalIdsRef.current.clear();
+      backlogDrainedRef.current = false;
+      
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Start fresh connection if we're the initiator
+      if (isInitiator && enabled && normalizedSelfId && normalizedPeerId) {
+        await startConnection();
+      }
+    } catch (error) {
+      console.error('Failed to restart connection:', error);
+      setError('Connection restart failed');
+      setStatus('error');
+    }
+  }, [sendByeSignal, resetConnectionRefs, isInitiator, enabled, normalizedSelfId, normalizedPeerId, startConnection]);
 
   const disconnect = useCallback(async () => {
     await cleanupConnection();
